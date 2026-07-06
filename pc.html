@@ -15,7 +15,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- 依存ライブラリ（ロード順を厳格化） -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <!-- QRCodeライブラリの読み込みURLを修正（cdnjsのものに変更） -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
@@ -363,11 +364,25 @@
                         }
 
                         this.$nextTick(() => {
-                            const qrCanvas = document.getElementById('qrcode-canvas');
-                            if (qrCanvas && typeof QRCode !== 'undefined') {
-                                QRCode.toCanvas(qrCanvas, qrData, { width: 220, margin: 1 }, (err) => {
-                                    if (err) console.error("QR Generation Error:", err);
-                                });
+                          const qrCanvas = document.getElementById('qrcode-canvas');
+                            if (qrCanvas && typeof qrcode !== 'undefined') {
+                                // 新しいライブラリの描画手順（確実かつ404エラーになりません）
+                                const qr = qrcode(0, 'L');
+                                qr.addData(qrData);
+                                qr.make();
+                                
+                                const ctx = qrCanvas.getContext('2d');
+                                const size = 220;
+                                qrCanvas.width = size;
+                                qrCanvas.height = size;
+                                
+                                const img = new Image();
+                                img.onload = () => {
+                                    ctx.clearRect(0, 0, size, size);
+                                    ctx.drawImage(img, 0, 0, size, size);
+                                };
+                                // base64のデータURIを生成してCanvasに描画
+                                img.src = qr.createDataURL(4, 0);
                             }
                         });
                     };

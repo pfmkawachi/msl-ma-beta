@@ -13,7 +13,7 @@
     <link rel="manifest" href="./site.webmanifest" />
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 接続・圧縮用ライブラリ -->
+    <!-- 依存ライブラリ（ロード順を厳格化） -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -123,10 +123,9 @@
             <div class="bg-slate-900 p-6 rounded-2xl border border-white/10 max-w-sm w-full text-center space-y-4">
                 <h3 class="text-md font-bold tracking-wider">スマートフォンと接続</h3>
                 <p class="text-xs opacity-60">スマホ側の「PCと接続」から、以下のQRコードを読み取ってください。</p>
-                <div class="bg-white p-3 rounded-xl inline-block mx-auto">
+                <div class="bg-white p-3 rounded-xl inline-block mx-auto" style="min-width: 220px; min-height: 220px;">
                     <canvas id="qrcode-canvas"></canvas>
                 </div>
-                <div class="text-xs font-mono bg-black/40 p-2 rounded text-left overflow-auto max-h-24 opacity-40 hidden" id="sdp-text"></div>
                 <button @click="showConnectionModal = false" class="btn btn-sm btn-neutral w-full rounded-xl">キャンセル</button>
             </div>
         </div>
@@ -157,19 +156,15 @@
                     <span class="text-xs opacity-60" x-text="isRecording ? `REC: ${recordedFrames.length}F` : (isPreviewingRecorded ? 'PREVIEW MODE' : 'LIVE')"></span>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                    <!-- 録画 / 停止 -->
                     <button class="btn font-bold rounded-xl" :class="isRecording ? 'btn-error animate-pulse' : 'btn-outline btn-error'" @click="toggleRecord">
                         <span x-text="isRecording ? '録画停止' : '録画開始'"></span>
                     </button>
-                    <!-- 直近の確認 -->
                     <button class="btn btn-neutral font-bold rounded-xl" :disabled="recordedFrames.length === 0 || isRecording" @click="togglePreviewRecorded">
                         <span x-text="isPreviewingRecorded ? 'ライブに戻る' : '動画の確認'"></span>
                     </button>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                    <!-- 取り込み -->
                     <button class="btn btn-primary font-bold rounded-xl text-xs" :disabled="recordedFrames.length === 0 || isRecording" @click="importToAnalyzer">解析画面へ取り込み</button>
-                    <!-- 保存 -->
                     <button class="btn btn-success font-bold rounded-xl text-xs" :disabled="recordedFrames.length === 0 || isRecording" @click="saveRecordedVideo">動画の保存</button>
                 </div>
             </div>
@@ -204,7 +199,7 @@
                     <p class="text-[9px] text-center opacity-30 font-mono">PC: Arrow keys (◀/▶) to step, Shift to skip 5F</p>
                 </div>
 
-                <!-- スピード調整（通常モードのみ有効） -->
+                <!-- スピード調整 -->
                 <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-2" x-show="!isStreamMode">
                     <div class="flex justify-between items-center text-[10px] font-mono text-slate-400 border-b border-white/5 pb-1.5">
                         <span class="font-black tracking-widest">02 / SPEED RATE</span>
@@ -219,7 +214,7 @@
                     </div>
                 </div>
 
-                <!-- ループ範囲指定（通常モードのみ有効） -->
+                <!-- ループ範囲指定 -->
                 <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-3" x-show="!isStreamMode">
                     <div class="flex justify-between items-center border-b border-white/5 pb-1.5">
                         <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">03 / INTERVAL LOOP</span>
@@ -275,30 +270,12 @@
                 isMirrored: false,
                 isTablet: false,
 
-                // ズーム・パン
-                zoomScale: 1.0,
-                zoomX: 0,
-                zoomY: 0,
-                isDragging: false,
-                startX: 0,
-                startY: 0,
-                baseScale: 1.0,
-                baseX: 0,
-                baseY: 0,
-                touchStartDist: 0,
-                touchStartMidX: 0,
-                touchStartMidY: 0,
-                isPinching: false,
-                lastTapTime: 0,
-                touchStartTime: 0,
-                clickStartTime: 0,
+                zoomScale: 1.0, zoomX: 0, zoomY: 0, isDragging: false, startX: 0, startY: 0,
+                baseScale: 1.0, baseX: 0, baseY: 0, touchStartDist: 0, touchStartMidX: 0, touchStartMidY: 0,
+                isPinching: false, lastTapTime: 0, touchStartTime: 0, clickStartTime: 0,
 
-                // ループ関係
-                startPoint: null,
-                endPoint: null,
-                loopEnabled: false,
+                startPoint: null, endPoint: null, loopEnabled: false,
 
-                // ストリーム・録画関連拡張機能
                 isStreamMode: false,
                 showConnectionModal: false,
                 peerConnection: null,
@@ -322,7 +299,7 @@
                         lastTouchEnd = now;
                     }, false);
                 },
-// WebRTC 接続セットアップ（QRコード生成・修正版）
+
                 async startConnectionOverlay() {
                     this.showConnectionModal = true;
                     if (this.peerConnection) this.peerConnection.close();
@@ -331,7 +308,6 @@
                         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                     });
 
-                    // 映像トラック受信時の処理
                     this.peerConnection.ontrack = (event) => {
                         this.showConnectionModal = false;
                         this.isStreamMode = true;
@@ -362,47 +338,47 @@
                         this.streamAnimationId = requestAnimationFrame(drawLoop);
                     };
 
-                    // データチャンネル（ネゴシエーションダミー）
                     this.peerConnection.createDataChannel("dummy");
 
                     const offer = await this.peerConnection.createOffer();
                     await this.peerConnection.setLocalDescription(offer);
 
-                    // 【修正】QRコードを確実に生成するための関数
                     const generateQrNow = () => {
-                        if (!this.showConnectionModal) return; // すでに閉じられていたら何もしない
+                        if (!this.showConnectionModal) return;
                         const sdp = this.peerConnection.localDescription.sdp;
+                        let qrData = "";
+
                         try {
-                            const compressed = pako.deflate(sdp, { to: 'string' });
-                            const base64Sdp = btoa(String.fromCharCode.apply(null, compressed));
-                            
+                            if (typeof pako !== 'undefined') {
+                                const enc = new TextEncoder();
+                                const u8Array = enc.encode(sdp);
+                                const compressed = pako.deflate(u8Array);
+                                qrData = btoa(String.fromCharCode.apply(null, compressed));
+                            } else {
+                                throw new Error("pako undefined");
+                            }
+                        } catch (e) {
+                            console.warn("Pako compression failed, falling back to raw Base64 SDP", e);
+                            qrData = btoa(unescape(encodeURIComponent(sdp)));
+                        }
+
+                        this.$nextTick(() => {
                             const qrCanvas = document.getElementById('qrcode-canvas');
-                            if (qrCanvas) {
-                                QRCode.toCanvas(qrCanvas, base64Sdp, { width: 220, margin: 1 }, (err) => {
+                            if (qrCanvas && typeof QRCode !== 'undefined') {
+                                QRCode.toCanvas(qrCanvas, qrData, { width: 220, margin: 1 }, (err) => {
                                     if (err) console.error("QR Generation Error:", err);
                                 });
                             }
-                        } catch (e) {
-                            console.error("SDP Compression Error:", e);
-                        }
+                        });
                     };
 
-                    // セーフティタイマー：ICE収集完了を待たずに1秒後に強制生成
-                    const safetyTimeoutId = setTimeout(() => {
-                        generateQrNow();
-                    }, 1000);
+                    generateQrNow();
 
-                    // ICE候補収集の監視
                     this.peerConnection.onicecandidate = (e) => {
-                        if (!e.candidate) {
-                            // 収集が完全に完了したらタイマーをクリアして即生成
-                            clearTimeout(safetyTimeoutId);
-                            generateQrNow();
-                        }
+                        generateQrNow();
                     };
                 },
 
-                // 録画制御（Canvas連写）
                 toggleRecord() {
                     if (this.isPreviewingRecorded) this.isPreviewingRecorded = false;
                     
@@ -422,7 +398,6 @@
                         clearInterval(this.recordTimerId);
                         
                         if (this.recordedFrames.length > 0) {
-                            // 履歴に一時保存（サムネイルは最初の1コマ）
                             this.captureHistory.push({
                                 thumbnail: this.recordedFrames[0],
                                 frames: [...this.recordedFrames]
@@ -431,7 +406,6 @@
                     }
                 },
 
-                // 直近録画のプレビュー
                 togglePreviewRecorded() {
                     if (this.isPreviewingRecorded) {
                         this.isPreviewingRecorded = false;
@@ -455,35 +429,24 @@
                     }
                 },
 
-                // 解析画面（通常モード）への取り込み
                 importToAnalyzer() {
                     if (this.recordedFrames.length === 0) return;
-                    
-                    // 連写画像群を疑似的に1つのファイルとして扱わせるためCanvas連携処理を行いますが
-                    // 既存UIとタイムラインスクラブを完全維持するため、データから一時オブジェクトURL（MPEG4等）を生成して流し込みます。
-                    // MediaRecorderを避けつつ、完全な互換性を確保します
                     alert("解析プレイヤーに取り込みました。コマ送り・ループが可能です。");
                     this.isStreamMode = false;
                     this.isPreviewingRecorded = false;
-                    
-                    // モックBlobとして読み込み
                     this.fileName = "Captured_Motion.mp4";
-                    // 実際の実装ではここでDataURLの配列をシーク可能な仮想構造体にするか、一時的なBlobを生成してプレーヤーに渡します
                     this.videoSrc = "dummy_captured"; 
                     this.duration = this.recordedFrames.length / this.fps;
                 },
 
-                // 履歴アイテムの読み込み
                 loadHistoryItem(index) {
                     this.recordedFrames = [...this.captureHistory[index].frames];
                     this.isPreviewingRecorded = false;
                     this.togglePreviewRecorded();
                 },
 
-                // 録画動画のダウンロード保存
                 saveRecordedVideo() {
                     if (this.recordedFrames.length === 0) return;
-                    // 代替としてのパラパラ画像一括保存（ZIPまたは先頭フレーム）
                     const a = document.createElement('a');
                     a.href = this.recordedFrames[0];
                     a.download = `captured_frame_0.jpg`;
@@ -496,7 +459,6 @@
                     if (this.peerConnection) this.peerConnection.close();
                 },
 
-                // 既存のキーボード/ジェスチャーハンドラー群
                 handleKeyDown(e) {
                     if (!this.videoSrc && !this.isStreamMode) return;
                     if (e.code === 'Space') { e.preventDefault(); this.isStreamMode ? this.toggleRecord() : this.togglePlay(); }
@@ -506,16 +468,13 @@
                 handleVideoWheel(e) {
                     if (!this.videoSrc && !this.isStreamMode) return;
                     e.preventDefault();
-                    const zoomIntensity = 0.1;
-                    const delta = e.deltaY < 0 ? 1 : -1;
+                    const zoomIntensity = 0.1; const delta = e.deltaY < 0 ? 1 : -1;
                     this.zoomScale = Math.min(Math.max(this.zoomScale + delta * zoomIntensity, 1.0), 5.0);
                     if (this.zoomScale <= 1.0) { this.zoomX = 0; this.zoomY = 0; }
                 },
                 handleVideoMouseDown(e) {
                     if ((!this.videoSrc && !this.isStreamMode) || this.isTablet || this.zoomScale <= 1.0) { this.clickStartTime = Date.now(); return; }
-                    this.isDragging = true;
-                    this.startX = e.clientX - this.zoomX;
-                    this.startY = e.clientY - this.zoomY;
+                    this.isDragging = true; this.startX = e.clientX - this.zoomX; this.startY = e.clientY - this.zoomY;
                 },
                 handleVideoMouseMove(e) { if (!this.isDragging) return; this.zoomX = e.clientX - this.startX; this.zoomY = e.clientY - this.startY; },
                 handleVideoMouseUp(e) {
@@ -531,8 +490,7 @@
                     if (e.touches.length === 1 && (now - this.lastTapTime < 300)) { this.resetZoom(); this.touchStartTime = 0; this.lastTapTime = 0; return; }
                     if (e.touches.length === 1) { this.lastTapTime = now; }
                     if (e.touches.length === 2) {
-                        this.isPinching = true;
-                        const t1 = e.touches[0]; const t2 = e.touches[1];
+                        this.isPinching = true; const t1 = e.touches[0]; const t2 = e.touches[1];
                         this.touchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
                         this.touchStartMidX = (t1.clientX + t2.clientX) / 2; this.touchStartMidY = (t1.clientY + t2.clientY) / 2;
                         this.baseScale = this.zoomScale; this.baseX = this.zoomX; this.baseY = this.zoomY;
@@ -596,10 +554,8 @@
                 stepFrame(direction) {
                     if(this.isStreamMode && this.isPreviewingRecorded) {
                         this.previewFrameIndex = (this.previewFrameIndex + direction + this.recordedFrames.length) % this.recordedFrames.length;
-                        const canvas = document.getElementById('stream-canvas');
-                        const ctx = canvas.getContext('2d');
-                        const img = new Image();
-                        img.onload = () => ctx.drawImage(img, 0, 0);
+                        const canvas = document.getElementById('stream-canvas'); const ctx = canvas.getContext('2d');
+                        const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0);
                         img.src = this.recordedFrames[this.previewFrameIndex];
                         return;
                     }

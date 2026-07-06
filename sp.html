@@ -13,7 +13,7 @@
     <link rel="manifest" href="./site.webmanifest" />
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- QR・接続用共通スクリプト -->
+    <!-- 依存ライブラリ（ロード順を厳格化） -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -254,15 +254,12 @@
                 activeTab: 0,
                 maxTabs: 3,
 
-                // ズーム・パン
                 zoomScale: 1.0, zoomX: 0, zoomY: 0, baseScale: 1.0, baseX: 0, baseY: 0,
                 touchStartDist: 0, touchStartMidX: 0, touchStartMidY: 0, isPinching: false, lastTapTime: 0,
                 touchStartTime: 0, touchStartX: 0, touchStartY: 0, startY: 0, currentY: 0, flickStartX: 0, flickStartY: 0,
 
-                // ループ
                 startPoint: null, endPoint: null, loopEnabled: false,
 
-                // QR・配信関係拡張
                 isQrScannerMode: false,
                 isStreaming: false,
                 localStream: null,
@@ -279,14 +276,12 @@
                     }, false);
                 },
 
-                // QRスキャナー・配信カメラ兼用一括起動
                 async startQrScanner() {
                     this.isQrScannerMode = true;
                     this.isStreaming = false;
                     if(this.videoSrc) { URL.revokeObjectURL(this.videoSrc); this.videoSrc = ''; }
 
                     try {
-                        // 最高画質・フレームレートで背面指定
                         this.localStream = await navigator.mediaDevices.getUserMedia({
                             video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
                             audio: false
@@ -296,7 +291,6 @@
                         previewVideo.srcObject = this.localStream;
                         previewVideo.play();
 
-                        // 隠しCanvasを用いてQRの解析ループを回す
                         const canvas = document.createElement('canvas');
                         const ctx = canvas.getContext('2d');
 
@@ -314,7 +308,6 @@
                                 });
 
                                 if (code) {
-                                    // 読み取り成功したらWebRTCシグナリング(一方通行)へ突入
                                     this.connectToPc(code.data);
                                     return;
                                 }
@@ -329,38 +322,43 @@
                     }
                 },
 
-                // PC側へのWebRTC一方通行ネゴシエーション
                 async connectToPc(base64Sdp) {
                     this.isStreaming = true;
                     if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
 
                     try {
-                        // pakoで圧縮されたSDPを復元
-                        const compressed = atob(base64Sdp);
-                        const charData = compressed.split('').map(x => x.charCodeAt(0));
-                        const binData = new Uint8Array(charData);
-                        const pcSdp = pako.inflate(binData, { to: 'string' });
+                        let pcSdp = "";
+                        const binaryString = atob(base64Sdp);
+
+                        try {
+                            const len = binaryString.length;
+                            const bytes = new Uint8Array(len);
+                            for (let i = 0; i < len; i++) {
+                                bytes[i] = binaryString.charCodeAt(i);
+                            }
+                            const inflated = pako.inflate(bytes);
+                            const dec = new TextDecoder();
+                            pcSdp = dec.decode(inflated);
+                        } catch (pakoErr) {
+                            console.warn("Pako inflate failed, trying raw SDP decode:", pakoErr);
+                            pcSdp = decodeURIComponent(escape(binaryString));
+                        }
 
                         this.peerConnection = new RTCPeerConnection({
                             iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                         });
 
-                        // ストリームを登録
                         this.localStream.getTracks().forEach(track => {
                             this.peerConnection.addTrack(track, this.localStream);
                         });
 
-                        // リモートOffer（PC側SDP）を擬似設定
                         await this.peerConnection.setRemoteDescription(new RTCSessionDescription({
                             type: 'offer',
                             sdp: pcSdp
                         }));
 
-                        // アンサーを生成してローカルにバインド
                         const answer = await this.peerConnection.createAnswer();
                         await this.peerConnection.setLocalDescription(answer);
-                        
-                        // 注意: サーバーレス完全一方通行のため、PC側は既にCandidateが集まった段階のSDPを待ち受けているためこれだけで確立します。
 
                     } catch (e) {
                         alert("接続処理に失敗しました。QRコードをもう一度読み込んでください。");
@@ -377,7 +375,6 @@
                     if (this.peerConnection) this.peerConnection.close();
                 },
 
-                // 既存の各種コントローラーロジック群
                 handleVideoTouchStart(e) {
                     if (!this.videoSrc && !this.isQrScannerMode) return;
                     const now = Date.now();

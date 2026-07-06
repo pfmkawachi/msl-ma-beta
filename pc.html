@@ -318,20 +318,55 @@
                 },
 
                 initSignaling() {
-                    this.eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
-                    this.eventSource.onmessage = async (e) => {
+                    const eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
+                    eventSource.onmessage = async (e) => {
                         const data = JSON.parse(e.data);
                         
-                        // 🌟 スマホからOfferが届いたら、それを受け取ってPeerConnectionを生成しAnswerを返す
+                        // スマホからOfferが届いたら、PC側で受け取ってAnswerを返すように変更
                         if (data.event === 'offer') {
-                            await this.setupPeerConnectionFromMobile(data.offer);
+                            await this.handleOffer(data.offer);
                         } else if (data.event === 'candidate' && data.candidate) {
                             if (this.peerConnection) {
-                                await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(err => console.log(err));
+                                await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
                             }
                         }
                     };
+                    // ここで setupPeerConnection() を即時実行するのをやめる（スマホを待つため）
                 },
+
+                // スマホから届いたOfferを処理する関数をPC側に追加
+                async handleOffer(offer) {
+                    this.peerConnection = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                    });
+                
+                    this.peerConnection.onicecandidate = (e) => {
+                        if (e.candidate) {
+                            fetch(`https://ntfy.sh/${this.topicId}`, {
+                                method: 'POST',
+                                body: JSON.stringify({ event: 'candidate', candidate: e.candidate })
+                            });
+                        }
+                    };
+
+                    this.peerConnection.ontrack = (e) => {
+                        this.isConnected = true;
+                        this.closeQRModal();
+                        this.liveStream = e.streams[0];
+                        this.videoElement.srcObject = this.liveStream;
+                        this.videoElement.play().catch(err => console.log(err));
+                    };
+
+                    // リモートのOfferを設定し、Answerを作ってスマホに返す
+                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                    const answer = await this.peerConnection.createAnswer();
+                    await this.peerConnection.setLocalDescription(answer);
+                
+                    fetch(`https://ntfy.sh/${this.topicId}`, {
+                        method: 'POST',
+                        body: JSON.stringify({ event: 'answer', answer: answer })
+                    });
+                }
 
                 async setupPeerConnectionFromMobile(offer) {
                     this.peerConnection = new RTCPeerConnection({

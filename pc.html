@@ -329,8 +329,14 @@
                     };
 
                     eventSource.onmessage = async (e) => {
-                        const data = JSON.parse(e.data);
-                        console.log('[DEBUG] 受信データ:', data);
+                        const envelope = JSON.parse(e.data);
+                        console.log('[DEBUG] 受信envelope:', envelope);
+
+                        // ntfyは実データを envelope.message に文字列として格納して送ってくるため、
+                        // もう一段JSON.parseして本来送りたかったデータを取り出す
+                        if (!envelope.message) return; // keep-alive等、中身が無い通知は無視
+                        const data = JSON.parse(envelope.message);
+                        console.log('[DEBUG] 受信データ(中身):', data);
 
                         // 自分自身が送信したメッセージは無視する(同じトピックを送受信両方で使っているため)
                         if (data.from === this.clientId) return;

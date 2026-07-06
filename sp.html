@@ -455,7 +455,12 @@
                             // PCからのAnswerを待つためのリスナー
                             const eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
                             eventSource.onmessage = async (e) => {
-                                const data = JSON.parse(e.data);
+                                const envelope = JSON.parse(e.data);
+
+                                // ntfyは実データを envelope.message に文字列として格納して送ってくるため、
+                                // もう一段JSON.parseして本来送りたかったデータを取り出す
+                                if (!envelope.message) return; // keep-alive等、中身が無い通知は無視
+                                const data = JSON.parse(envelope.message);
 
                                 // 自分自身が送信したメッセージは無視する
                                 if (data.from === this.clientId) return;

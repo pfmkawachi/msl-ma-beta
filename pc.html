@@ -335,7 +335,15 @@
                         // ntfyは実データを envelope.message に文字列として格納して送ってくるため、
                         // もう一段JSON.parseして本来送りたかったデータを取り出す
                         if (!envelope.message) return; // keep-alive等、中身が無い通知は無視
-                        const data = JSON.parse(envelope.message);
+
+                        let data;
+                        try {
+                            data = JSON.parse(envelope.message);
+                        } catch (err) {
+                            // ntfy側の制限超過メッセージなど、JSON以外が届くことがあるため無視する(念のための保険)
+                            console.warn('[DEBUG] JSON以外のメッセージを受信したため無視:', envelope.message);
+                            return;
+                        }
                         console.log('[DEBUG] 受信データ(中身):', data);
 
                         // 自分自身が送信したメッセージは無視する(同じトピックを送受信両方で使っているため)
@@ -344,10 +352,6 @@
                         // スマホからOfferが届いたら、PC側で受け取ってAnswerを返すように変更
                         if (data.event === 'offer') {
                             await this.handleOffer(data.offer);
-                        } else if (data.event === 'candidate' && data.candidate) {
-                            if (this.peerConnection) {
-                                await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-                            }
                         }
                     };
                     // ここで setupPeerConnection() を即時実行するのをやめる（スマホを待つため）
@@ -358,12 +362,18 @@
                     this.peerConnection = new RTCPeerConnection({
                         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                     });
-                
-                    this.peerConnection.onicecandidate = (e) => {
-                        if (e.candidate) {
+
+                    // ICE candidateを1個ずつ送るのをやめ、候補が出揃うまで待ってからまとめて送る方式に変更
+                    // (ntfy.shの送信回数制限にかかるのを防ぐため)
+                    this.peerConnection.onicegatheringstatechange = () => {
+                        if (this.peerConnection.iceGatheringState === 'complete') {
                             fetch(`https://ntfy.sh/${this.topicId}`, {
                                 method: 'POST',
-                                body: JSON.stringify({ event: 'candidate', candidate: e.candidate, from: this.clientId })
+                                body: JSON.stringify({
+                                    event: 'answer',
+                                    answer: this.peerConnection.localDescription,
+                                    from: this.clientId
+                                })
                             });
                         }
                     };
@@ -376,15 +386,11 @@
                         this.videoElement.play().catch(err => console.log(err));
                     };
 
-                    // リモートのOfferを設定し、Answerを作ってスマホに返す
+                    // リモートのOfferを設定し、Answerを作成する
+                    // (Answerの送信自体は上のonicegatheringstatechangeで候補が出揃ってから行う)
                     await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
                     const answer = await this.peerConnection.createAnswer();
                     await this.peerConnection.setLocalDescription(answer);
-                
-                    fetch(`https://ntfy.sh/${this.topicId}`, {
-                        method: 'POST',
-                        body: JSON.stringify({ event: 'answer', answer: answer, from: this.clientId })
-                    });
                 },
 
                 toggleRecording() {

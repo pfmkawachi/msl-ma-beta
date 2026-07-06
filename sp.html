@@ -92,14 +92,14 @@
                 </div>
                 <p class="text-[10px] font-mono mb-0">Modular Spin Lab</p>
                 <h2 class="text-sm font-black tracking-wider text-white mt-2 mb-2"><img src="./img/logo.svg" alt="MOTION ANALYZER" width="280"></h2>
-                <p class="text-[8px] opacity-40 font-mono mb-4">MOBILE beta v1.1 - 20260707</p>
+                <p class="text-[8px] opacity-40 font-mono mb-4">MOBILE beta v1.2 - 20260707</p>
                 
                 <div class="flex flex-col gap-2 w-full max-w-[180px] mx-auto">
                     <div class="relative">
                         <button class="btn btn-primary btn-sm w-full rounded-xl font-bold shadow-lg shadow-primary/30 text-xs">CHOOSE VIDEO</button>
                         <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                     </div>
-                    <button @click="startQrScanner" class="btn btn-outline btn-accent btn-sm w-full rounded-xl font-bold text-xs">PCと接続</button>
+                    <button @click="handleConnectionMenu" class="btn btn-outline btn-accent btn-sm w-full rounded-xl font-bold text-xs">PCと接続</button>
                 </div>
             </div>
 
@@ -265,6 +265,7 @@
                 localStream: null,
                 peerConnection: null,
                 scanAnimationId: null,
+                ntfyTopic: '', // 追加：通信用トピック名
 
                 initApp() {
                     this.fps = parseInt(localStorage.getItem('local_controller_fps') || '30');
@@ -275,15 +276,30 @@
                         lastTouchEnd = now;
                     }, false);
 
-                    // --- 【★ここを修正・追加】URLに直接SDPが含まれる場合、自動接続処理をキックする ---
+                    // URLに直接SDPまたはトピックIDが含まれる場合の自動接続処理
                     const urlParams = new URLSearchParams(window.location.search);
                     const sdpParam = urlParams.get('sdp');
-                    if (sdpParam) {
-                        console.log("URLパラメータからSDPを検出しました。自動接続を試みます。");
-                        // 描画サイクルとカメラパーミッション周りの整合性を取るためnextTickで実行
+                    const topicParam = urlParams.get('topic'); // 【変更】直接ntfyトピックを受け取るルートに対応
+
+                    if (sdpParam || topicParam) {
                         this.$nextTick(() => {
-                            this.connectToPc(sdpParam);
+                            this.connectToPc(sdpParam || topicParam);
                         });
+                    }
+                },
+
+                // 【追加】「PCと接続」が押された際のルーティングメニュー
+                handleConnectionMenu() {
+                    const choice = confirm("接続方法を選択してください。\n\n【OK】: カメラでPCのQRコードをスキャンする\n【キャンセル】: PCに表示された4桁のコードを手動入力する");
+                    if (choice) {
+                        this.startQrScanner();
+                    } else {
+                        const code = prompt("PC画面に表示されている4桁の接続コードを入力してください:");
+                        if (code && code.trim().length === 4) {
+                            this.connectToPc(code.trim());
+                        } else if (code) {
+                            alert("コードは4桁の数字で入力してください。");
+                        }
                     }
                 },
 
@@ -333,41 +349,86 @@
                     }
                 },
 
-                async connectToPc(base64Sdp) {
+                // 【大幅改修】ntfy.shを経由してOfferを取得し、Answerを返すP2P接続コアロジック
+                async connectToPc(rawInput) {
                     this.isStreaming = true;
                     if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
 
+                    // 1. ローカルのカメラ映像ストリームがまだ立ち上がっていない場合は起動（手動接続・URL起動用）
+                    if (!this.localStream) {
+                        try {
+                            this.isQrScannerMode = true;
+                            this.localStream = await navigator.mediaDevices.getUserMedia({
+                                video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
+                                audio: false
+                            });
+                            const previewVideo = document.getElementById('mobile-preview');
+                            previewVideo.srcObject = this.localStream;
+                            previewVideo.play();
+                        } catch (camErr) {
+                            alert("配信用のカメラ起動に失敗しました。カメラパーミッションを許可してください。");
+                            this.stopQrScanner();
+                            return;
+                        }
+                    }
+
                     try {
-                        // もし読み取ったデータがURLだった場合、パラメータからSDPを抽出する
-                        if (base64Sdp.startsWith('http://') || base64Sdp.startsWith('https://')) {
-                            try {
-                                const urlObj = new URL(base64Sdp);
-                                const sdpParam = urlObj.searchParams.get('sdp');
-                                if (sdpParam) {
-                                    base64Sdp = sdpParam; // 中身のデータだけを本来の変数に上書き
+                        let targetTopic = "";
+                        let base64Sdp = "";
+
+                        // A. 入力がURLの場合 (QR読取や標準カメラアプリからのインバウンド)
+                        if (rawInput.startsWith('http://') || rawInput.startsWith('https://')) {
+                            const urlObj = new URL(rawInput);
+                            if (urlObj.searchParams.has('topic')) {
+                                targetTopic = urlObj.searchParams.get('topic');
+                            } else if (urlObj.searchParams.has('sdp')) {
+                                base64Sdp = urlObj.searchParams.get('sdp');
+                            }
+                        } 
+                        // B. 入力が4桁のコード（トピックIDの直打ち）の場合
+                        else if (rawInput.length === 4 && /^\d+$/.test(rawInput)) {
+                            targetTopic = `msl-ma-${rawInput}`;
+                        } 
+                        // C. レガシーな生SDPデータの場合
+                        else {
+                            base64Sdp = rawInput;
+                        }
+
+                        // トピックIDが特定できた場合、ntfy.shからPCのOfferをダウンロードする
+                        if (targetTopic) {
+                            this.ntfyTopic = targetTopic;
+                            const res = await fetch(`https://ntfy.sh/${this.ntfyTopic}/json?poll=1`);
+                            const data = await res.text();
+                            // ntfyのブロードキャストから最後の有効なメッセージ(Offer)を探す
+                            const lines = data.trim().split('\n');
+                            for (let i = lines.length - 1; i >= 0; i--) {
+                                if (!lines[i]) continue;
+                                const msgObj = JSON.parse(lines[i]);
+                                if (msgObj.event === 'message' && msgObj.message) {
+                                    base64Sdp = msgObj.message;
+                                    break;
                                 }
-                            } catch (urlErr) {
-                                console.error("URLの解析に失敗しました", urlErr);
                             }
                         }
 
+                        if (!base64Sdp) {
+                            throw new Error("PC側からの有効な接続データが見つかりませんでした。");
+                        }
+
+                        // SDP文字列の復元（解凍処理）
                         let pcSdp = "";
                         const binaryString = atob(base64Sdp);
-
                         try {
                             const len = binaryString.length;
                             const bytes = new Uint8Array(len);
-                            for (let i = 0; i < len; i++) {
-                                bytes[i] = binaryString.charCodeAt(i);
-                            }
+                            for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
                             const inflated = pako.inflate(bytes);
-                            const dec = new TextDecoder();
-                            pcSdp = dec.decode(inflated);
+                            pcSdp = new TextDecoder().decode(inflated);
                         } catch (pakoErr) {
-                            console.warn("Pako inflate failed, trying raw SDP decode:", pakoErr);
                             pcSdp = decodeURIComponent(escape(binaryString));
                         }
 
+                        // WebRTCピア接続の初期化
                         this.peerConnection = new RTCPeerConnection({
                             iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                         });
@@ -384,10 +445,31 @@
                         const answer = await this.peerConnection.createAnswer();
                         await this.peerConnection.setLocalDescription(answer);
 
+                        // --- 【超重要】生成したAnswerをntfy.sh経由でPCにプッシュバックする ---
+                        let rawAnswerData = "";
+                        try {
+                            const u8Array = new TextEncoder().encode(answer.sdp);
+                            const compressed = pako.deflate(u8Array);
+                            rawAnswerData = btoa(String.fromCharCode.apply(null, compressed));
+                        } catch(e) {
+                            rawAnswerData = btoa(unescape(encodeURIComponent(answer.sdp)));
+                        }
+
+                        // トピックがまだ無ければ一時的なものを定義（基本はPC版生成のものを使用）
+                        if (!this.ntfyTopic) {
+                            this.ntfyTopic = "msl-ma-fallback";
+                        }
+
+                        // PC宛てに伝言板へAnswerを書き込む
+                        await fetch(`https://ntfy.sh/${this.ntfyTopic}`, {
+                            method: 'POST',
+                            body: rawAnswerData,
+                            headers: { 'X-Title': 'ANSWER_SDP' }
+                        });
+
                     } catch (e) {
-                        alert("接続処理に失敗しました。QRコードをもう一度読み込んでください。");
-                        this.isStreaming = false;
-                        this.startQrScanner();
+                        alert("接続に失敗しました: " + e.message);
+                        this.stopQrScanner();
                     }
                 },
 
@@ -396,7 +478,10 @@
                     this.isStreaming = false;
                     if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
                     if (this.localStream) this.localStream.getTracks().forEach(t => t.stop());
+                    this.localStream = null;
                     if (this.peerConnection) this.peerConnection.close();
+                    this.peerConnection = null;
+                    this.ntfyTopic = '';
                 },
 
                 handleVideoTouchStart(e) {

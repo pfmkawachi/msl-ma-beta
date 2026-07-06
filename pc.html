@@ -12,10 +12,9 @@
     <meta name="apple-mobile-web-app-title" content="M-Analyzer" />
     <link rel="manifest" href="./site.webmanifest" />
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://tailwindcss.com"></script>
     <!-- 依存ライブラリ（ロード順を厳格化） -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-    <!-- QRCodeライブラリの読み込みURLを修正（cdnjsのものに変更） -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
@@ -87,7 +86,7 @@
                 </div>
                 <p class="text-[10px] font-mono mb-0">Modular Spin Lab</p>
                 <h2 class="text-xl font-black tracking-widest text-white mt-2 mb-2"><img src="./img/logo.svg" alt="MOTION ANALYZER" width="320"></h2>
-                <p class="text-[10px] opacity-40 font-mono mb-6">beta v1.1 - 20260707</p>
+                <p class="text-[10px] opacity-40 font-mono mb-6">DESKTOP beta w/ntfy v1.2 - 20260707</p>
                 
                 <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
                     <div class="relative">
@@ -119,15 +118,22 @@
             </div>
         </div>
 
-        <!-- 接続用モーダルオーバーレイ -->
+        <!-- 接続用モーダルオーバーレイ（4桁接続コード表示を追加） -->
         <div class="absolute inset-0 bg-slate-950/90 z-50 flex flex-col items-center justify-center p-6" x-show="showConnectionModal" x-cloak>
             <div class="bg-slate-900 p-6 rounded-2xl border border-white/10 max-w-sm w-full text-center space-y-4">
                 <h3 class="text-md font-bold tracking-wider">スマートフォンと接続</h3>
-                <p class="text-xs opacity-60">スマホ側の「PCと接続」から、以下のQRコードを読み取ってください。</p>
+                
+                <!-- 【追加】4桁の簡易接続コードUI -->
+                <div class="py-2 px-4 bg-slate-950 rounded-xl border border-white/5 inline-block mx-auto">
+                    <span class="text-[10px] text-slate-400 font-mono block uppercase tracking-widest mb-1">接続コード</span>
+                    <span class="text-3xl font-black font-mono tracking-widest text-accent" x-text="connectionCode">0000</span>
+                </div>
+
+                <p class="text-xs opacity-60">スマホの「PCと接続」から上記コードを入力するか、標準カメラで下のQRコードをスキャンしてください。</p>
                 <div class="bg-white p-3 rounded-xl inline-block mx-auto" style="min-width: 220px; min-height: 220px;">
                     <canvas id="qrcode-canvas"></canvas>
                 </div>
-                <button @click="showConnectionModal = false" class="btn btn-sm btn-neutral w-full rounded-xl">キャンセル</button>
+                <button @click="closeConnectionOverlay" class="btn btn-sm btn-neutral w-full rounded-xl">キャンセル</button>
             </div>
         </div>
 
@@ -289,6 +295,10 @@
                 streamAnimationId: null,
                 recordTimerId: null,
 
+                // 追加：ntfy用管理プロパティ
+                connectionCode: '0000',
+                ntfyEventSource: null,
+
                 initApp() {
                     this.fps = parseInt(localStorage.getItem('local_controller_fps') || '30');
                     this.isTablet = ('ontouchstart' in window || navigator.maxTouchPoints > 0);
@@ -301,15 +311,25 @@
                     }, false);
                 },
 
+                // 【大幅改修】ntfy.shを使用したシグナリングサーバーレスP2P待機処理
                 async startConnectionOverlay() {
                     this.showConnectionModal = true;
+                    
+                    // 1. 4桁の接続コードとユニークなトピック名を生成
+                    const rand4 = Math.floor(1000 + Math.random() * 9000).toString();
+                    this.connectionCode = rand4;
+                    const topicName = `msl-ma-${rand4}`;
+
                     if (this.peerConnection) this.peerConnection.close();
+                    if (this.ntfyEventSource) this.ntfyEventSource.close();
                     
                     this.peerConnection = new RTCPeerConnection({
                         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                     });
 
+                    // リモート(スマホ)からカメラ映像を受信したときの処理
                     this.peerConnection.ontrack = (event) => {
+                        this.cleanupNtfy();
                         this.showConnectionModal = false;
                         this.isStreamMode = true;
                         if(this.videoSrc) { URL.revokeObjectURL(this.videoSrc); this.videoSrc = ''; }
@@ -344,8 +364,8 @@
                     const offer = await this.peerConnection.createOffer();
                     await this.peerConnection.setLocalDescription(offer);
 
-                    const generateQrNow = () => {
-                        if (!this.showConnectionModal) return;
+                    // ntfy.shへOfferをパブリッシュする内部ファンクション
+                    const publishOfferToNtfy = async () => {
                         const sdp = this.peerConnection.localDescription.sdp;
                         let rawQrData = "";
 
@@ -359,21 +379,25 @@
                                 throw new Error("pako undefined");
                             }
                         } catch (e) {
-                            console.warn("Pako compression failed, falling back to raw Base64 SDP", e);
                             rawQrData = btoa(unescape(encodeURIComponent(sdp)));
                         }
 
-                        // 【★ここを修正】単なるデータではなく、スマホ版のURLにパラメータとして付与する
-                        const baseUrl = "https://pfmkawachi.github.io/msl-ma-beta/sp.html";
-                        const qrData = `${baseUrl}?sdp=${encodeURIComponent(rawQrData)}`;
+                        // ntfyの同一トピック宛てにOffer SDPをPOST送信
+                        await fetch(`https://ntfy.sh/${topicName}`, {
+                            method: 'POST',
+                            body: rawQrData,
+                            headers: { 'X-Title': 'OFFER_SDP' }
+                        });
 
+                        // モバイルアプリの公開URL構成に合わせる (パラメータはトピック名を引き渡す)
+                        const baseUrl = "https://pfmkawachi.github.io/msl-ma-beta/sp.html";
+                        const qrData = `${baseUrl}?topic=${topicName}`;
+
+                        // QRコードのキャンバス描画
                         this.$nextTick(() => {
                             const qrCanvas = document.getElementById('qrcode-canvas');
                             if (qrCanvas && typeof qrcode !== 'undefined') {
-                                // 0: 自動調整, 'L': 誤り訂正レベル低
                                 const qr = qrcode(0, 'L');
-                                
-                                // 組み立てたURLをQRコードに書き込む
                                 qr.addData(qrData, 'Byte'); 
                                 qr.make();
                                 
@@ -392,11 +416,57 @@
                         });
                     };
 
-                    generateQrNow();
+                    // 初回送信
+                    await publishOfferToNtfy();
 
+                    // ICE candidate収集が完了するごとに再送してSDP精度を高める
                     this.peerConnection.onicecandidate = (e) => {
-                        generateQrNow();
+                        publishOfferToNtfy();
                     };
+
+                    // 【新規】ntfy.shの伝言板をリアルタイム監視してモバイルからのAnswerを待つ(SSE)
+                    this.ntfyEventSource = new EventSource(`https://ntfy.sh/${topicName}/sse`);
+                    this.ntfyEventSource.onmessage = async (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.event === 'message' && data.title === 'ANSWER_SDP') {
+                            const base64Answer = data.message;
+                            
+                            // Answer SDPのデコードと展開
+                            let answerSdp = "";
+                            const binaryString = atob(base64Answer);
+                            try {
+                                const len = binaryString.length;
+                                const bytes = new Uint8Array(len);
+                                for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
+                                const inflated = pako.inflate(bytes);
+                                answerSdp = new TextDecoder().decode(inflated);
+                            } catch (pakoErr) {
+                                answerSdp = decodeURIComponent(escape(binaryString));
+                            }
+
+                            // ピアにAnswerを設定。これでP2Pが直接結ばれる
+                            if (this.peerConnection.signalingState === "have-local-offer") {
+                                await this.peerConnection.setRemoteDescription(new RTCSessionDescription({
+                                    type: 'answer',
+                                    sdp: answerSdp
+                                }));
+                            }
+                        }
+                    };
+                },
+
+                // ntfyのイベントリスナー破棄用
+                cleanupNtfy() {
+                    if (this.ntfyEventSource) {
+                        this.ntfyEventSource.close();
+                        this.ntfyEventSource = null;
+                    }
+                },
+
+                closeConnectionOverlay() {
+                    this.showConnectionModal = false;
+                    this.cleanupNtfy();
+                    if (this.peerConnection) this.peerConnection.close();
                 },
 
                 toggleRecord() {
@@ -477,6 +547,7 @@
                     this.isStreamMode = false;
                     if (this.streamAnimationId) cancelAnimationFrame(this.streamAnimationId);
                     if (this.peerConnection) this.peerConnection.close();
+                    this.cleanupNtfy();
                 },
 
                 handleKeyDown(e) {

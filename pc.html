@@ -347,29 +347,33 @@
                     const generateQrNow = () => {
                         if (!this.showConnectionModal) return;
                         const sdp = this.peerConnection.localDescription.sdp;
-                        let qrData = "";
+                        let rawQrData = "";
 
                         try {
                             if (typeof pako !== 'undefined') {
                                 const enc = new TextEncoder();
                                 const u8Array = enc.encode(sdp);
                                 const compressed = pako.deflate(u8Array);
-                                qrData = btoa(String.fromCharCode.apply(null, compressed));
+                                rawQrData = btoa(String.fromCharCode.apply(null, compressed));
                             } else {
                                 throw new Error("pako undefined");
                             }
                         } catch (e) {
                             console.warn("Pako compression failed, falling back to raw Base64 SDP", e);
-                            qrData = btoa(unescape(encodeURIComponent(sdp)));
+                            rawQrData = btoa(unescape(encodeURIComponent(sdp)));
                         }
+
+                        // 【★ここを修正】単なるデータではなく、スマホ版のURLにパラメータとして付与する
+                        const baseUrl = "https://pfmkawachi.github.io/msl-ma-beta/sp.html";
+                        const qrData = `${baseUrl}?sdp=${encodeURIComponent(rawQrData)}`;
 
                         this.$nextTick(() => {
                             const qrCanvas = document.getElementById('qrcode-canvas');
                             if (qrCanvas && typeof qrcode !== 'undefined') {
-                                // 0: 自動調整, 'L': 誤り訂正レベル低（ドットを細かくしすぎない） 
+                                // 0: 自動調整, 'L': 誤り訂正レベル低
                                 const qr = qrcode(0, 'L');
                                 
-                                // 【重要】qrData（URL文字列）を確実にそのままテキストとして追加
+                                // 組み立てたURLをQRコードに書き込む
                                 qr.addData(qrData, 'Byte'); 
                                 qr.make();
                                 
@@ -383,7 +387,6 @@
                                     ctx.clearRect(0, 0, size, size);
                                     ctx.drawImage(img, 0, 0, size, size);
                                 };
-                                // QRコードの画像データをCanvasに反映
                                 img.src = qr.createDataURL(4, 0);
                             }
                         });

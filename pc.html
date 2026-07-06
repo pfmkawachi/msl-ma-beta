@@ -322,8 +322,15 @@
 
                 initSignaling() {
                     const eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
+                    console.log('[DEBUG] SSE接続開始。topicId =', this.topicId);
+
+                    eventSource.onerror = (e) => {
+                        console.error('[DEBUG] SSE接続エラー:', e);
+                    };
+
                     eventSource.onmessage = async (e) => {
                         const data = JSON.parse(e.data);
+                        console.log('[DEBUG] 受信データ:', data);
 
                         // 自分自身が送信したメッセージは無視する(同じトピックを送受信両方で使っているため)
                         if (data.from === this.clientId) return;

@@ -13,9 +13,12 @@
     <link rel="manifest" href="./site.webmanifest" />
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <!-- QRコード読み取り用の軽量外部ライブラリを追加 -->
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <!-- 動作確認用：スマホ画面上にコンソールログを表示するツール(原因特定後に削除予定) -->
+    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <script>eruda.init();</script>
     <style>
         [x-cloak] { display: none !important; }
         
@@ -416,6 +419,7 @@
                                 const url = new URL(code.data);
                                 const room = url.searchParams.get('room');
                                 if (room) {
+                                    console.log('[DEBUG] QR読み取り成功。roomId =', room);
                                     this.topicId = room;
                                     // 自分が送った信号を自分で拾わないよう、識別用のIDを発行する
                                     this.clientId = 'sp_' + Math.random().toString(36).substring(2, 10);
@@ -446,6 +450,7 @@
                             });
                             previewVideo.srcObject = this.localStream;
                             previewVideo.play();
+                            console.log('[DEBUG] カメラ起動成功。localStream取得済み');
                 
                             // PCからのAnswerを待つためのリスナー
                             const eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
@@ -502,7 +507,9 @@
                     fetch(`https://ntfy.sh/${this.topicId}`, {
                         method: 'POST',
                         body: JSON.stringify({ event: 'offer', offer: offer, from: this.clientId })
-                    });
+                    })
+                    .then(res => console.log('[DEBUG] Offer送信 完了。status =', res.status, ' topicId =', this.topicId))
+                    .catch(err => console.error('[DEBUG] Offer送信 失敗:', err));
                 },
 
                 disconnectFromPc() {

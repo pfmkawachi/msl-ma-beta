@@ -8,7 +8,7 @@
     <link rel="icon" type="image/png" href="./img/favicon-96x96.png" sizes="96x96" />
     <link rel="icon" type="image/svg+xml" href="./img/favicon.svg" />
     <link rel="shortcut icon" href="./img/favicon.ico" />
-    <link rel="apple-touch-icon" sizes="180x180" href="./img/apple-touch-icon.png" />
+    <link class="apple-touch-icon" sizes="180x180" href="./img/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="M-Analyzer" />
     <link rel="manifest" href="./site.webmanifest" />
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
@@ -274,6 +274,17 @@
                         if (now - lastTouchEnd <= 300) { e.preventDefault(); }
                         lastTouchEnd = now;
                     }, false);
+
+                    // --- 【★ここを修正・追加】URLに直接SDPが含まれる場合、自動接続処理をキックする ---
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const sdpParam = urlParams.get('sdp');
+                    if (sdpParam) {
+                        console.log("URLパラメータからSDPを検出しました。自動接続を試みます。");
+                        // 描画サイクルとカメラパーミッション周りの整合性を取るためnextTickで実行
+                        this.$nextTick(() => {
+                            this.connectToPc(sdpParam);
+                        });
+                    }
                 },
 
                 async startQrScanner() {
@@ -327,7 +338,7 @@
                     if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
 
                     try {
-                        // 【★ここを追加】もし読み取ったデータがURLだった場合、パラメータからSDPを抽出する
+                        // もし読み取ったデータがURLだった場合、パラメータからSDPを抽出する
                         if (base64Sdp.startsWith('http://') || base64Sdp.startsWith('https://')) {
                             try {
                                 const urlObj = new URL(base64Sdp);

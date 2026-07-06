@@ -327,6 +327,19 @@
                     if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
 
                     try {
+                        // 【★ここを追加】もし読み取ったデータがURLだった場合、パラメータからSDPを抽出する
+                        if (base64Sdp.startsWith('http://') || base64Sdp.startsWith('https://')) {
+                            try {
+                                const urlObj = new URL(base64Sdp);
+                                const sdpParam = urlObj.searchParams.get('sdp');
+                                if (sdpParam) {
+                                    base64Sdp = sdpParam; // 中身のデータだけを本来の変数に上書き
+                                }
+                            } catch (urlErr) {
+                                console.error("URLの解析に失敗しました", urlErr);
+                            }
+                        }
+
                         let pcSdp = "";
                         const binaryString = atob(base64Sdp);
 

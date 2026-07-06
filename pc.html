@@ -322,8 +322,7 @@
                         lastTouchEnd = now;
                     }, false);
                 },
-
-                // WebRTC 接続セットアップ（QRコード生成）
+// WebRTC 接続セットアップ（QRコード生成・修正版）
                 async startConnectionOverlay() {
                     this.showConnectionModal = true;
                     if (this.peerConnection) this.peerConnection.close();
@@ -340,7 +339,6 @@
                         
                         this.remoteStream = event.streams[0];
                         
-                        // 隠しビデオ要素を作ってCanvasへ描画循環を開始
                         const hiddenVideo = document.createElement('video');
                         hiddenVideo.srcObject = this.remoteStream;
                         hiddenVideo.muted = true;
@@ -370,18 +368,36 @@
                     const offer = await this.peerConnection.createOffer();
                     await this.peerConnection.setLocalDescription(offer);
 
-                    // ICE候補収集完了を待ってからQRコードにする
-                    this.peerConnection.onicecandidate = (e) => {
-                        if (!e.candidate) {
-                            const sdp = this.peerConnection.localDescription.sdp;
-                            // pakoでSDPを圧縮してQRのサイズを小さくする
+                    // 【修正】QRコードを確実に生成するための関数
+                    const generateQrNow = () => {
+                        if (!this.showConnectionModal) return; // すでに閉じられていたら何もしない
+                        const sdp = this.peerConnection.localDescription.sdp;
+                        try {
                             const compressed = pako.deflate(sdp, { to: 'string' });
                             const base64Sdp = btoa(String.fromCharCode.apply(null, compressed));
                             
                             const qrCanvas = document.getElementById('qrcode-canvas');
-                            QRCode.toCanvas(qrCanvas, base64Sdp, { width: 220, margin: 1 }, (err) => {
-                                if (err) console.error(err);
-                            });
+                            if (qrCanvas) {
+                                QRCode.toCanvas(qrCanvas, base64Sdp, { width: 220, margin: 1 }, (err) => {
+                                    if (err) console.error("QR Generation Error:", err);
+                                });
+                            }
+                        } catch (e) {
+                            console.error("SDP Compression Error:", e);
+                        }
+                    };
+
+                    // セーフティタイマー：ICE収集完了を待たずに1秒後に強制生成
+                    const safetyTimeoutId = setTimeout(() => {
+                        generateQrNow();
+                    }, 1000);
+
+                    // ICE候補収集の監視
+                    this.peerConnection.onicecandidate = (e) => {
+                        if (!e.candidate) {
+                            // 収集が完全に完了したらタイマーをクリアして即生成
+                            clearTimeout(safetyTimeoutId);
+                            generateQrNow();
                         }
                     };
                 },

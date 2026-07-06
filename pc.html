@@ -255,6 +255,7 @@
                 isConnected: false,
                 isRecording: false,
                 topicId: '',
+                clientId: '',
                 qrCodeUrl: '',
                 peerConnection: null,
                 mediaRecorder: null,
@@ -301,6 +302,8 @@
                 // 🌐 WebRTC接続の初期設定 (スマホ側からのOffer待ち受け駆動へ改修)
                 async startWebRTCSetup() {
                     this.topicId = 'msl_ma_' + Math.random().toString(36).substring(2, 15);
+                    // 自分が送った信号を自分で拾わないよう、識別用のIDを発行する
+                    this.clientId = 'pc_' + Math.random().toString(36).substring(2, 10);
                     const baseAppUrl = window.location.href.replace('pc.html', 'sp.html');
                     const connectUrl = `${baseAppUrl}?room=${this.topicId}`;
                     this.qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(connectUrl)}`;
@@ -321,7 +324,10 @@
                     const eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
                     eventSource.onmessage = async (e) => {
                         const data = JSON.parse(e.data);
-                        
+
+                        // 自分自身が送信したメッセージは無視する(同じトピックを送受信両方で使っているため)
+                        if (data.from === this.clientId) return;
+
                         // スマホからOfferが届いたら、PC側で受け取ってAnswerを返すように変更
                         if (data.event === 'offer') {
                             await this.handleOffer(data.offer);
@@ -344,7 +350,7 @@
                         if (e.candidate) {
                             fetch(`https://ntfy.sh/${this.topicId}`, {
                                 method: 'POST',
-                                body: JSON.stringify({ event: 'candidate', candidate: e.candidate })
+                                body: JSON.stringify({ event: 'candidate', candidate: e.candidate, from: this.clientId })
                             });
                         }
                     };
@@ -364,7 +370,7 @@
                 
                     fetch(`https://ntfy.sh/${this.topicId}`, {
                         method: 'POST',
-                        body: JSON.stringify({ event: 'answer', answer: answer })
+                        body: JSON.stringify({ event: 'answer', answer: answer, from: this.clientId })
                     });
                 },
 

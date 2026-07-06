@@ -364,11 +364,13 @@
                         }
 
                         this.$nextTick(() => {
-                          const qrCanvas = document.getElementById('qrcode-canvas');
+                            const qrCanvas = document.getElementById('qrcode-canvas');
                             if (qrCanvas && typeof qrcode !== 'undefined') {
-                                // 新しいライブラリの描画手順（確実かつ404エラーになりません）
+                                // 0: 自動調整, 'L': 誤り訂正レベル低（ドットを細かくしすぎない）
                                 const qr = qrcode(0, 'L');
-                                qr.addData(qrData);
+                                
+                                // 【重要】qrData（URL文字列）を確実にそのままテキストとして追加
+                                qr.addData(qrData, 'Byte'); 
                                 qr.make();
                                 
                                 const ctx = qrCanvas.getContext('2d');
@@ -381,7 +383,7 @@
                                     ctx.clearRect(0, 0, size, size);
                                     ctx.drawImage(img, 0, 0, size, size);
                                 };
-                                // base64のデータURIを生成してCanvasに描画
+                                // QRコードの画像データをCanvasに反映
                                 img.src = qr.createDataURL(4, 0);
                             }
                         });

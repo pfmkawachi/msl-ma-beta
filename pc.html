@@ -366,7 +366,7 @@
                         this.$nextTick(() => {
                             const qrCanvas = document.getElementById('qrcode-canvas');
                             if (qrCanvas && typeof qrcode !== 'undefined') {
-                                // 0: 自動調整, 'L': 誤り訂正レベル低（ドットを細かくしすぎない）
+                                // 0: 自動調整, 'L': 誤り訂正レベル低（ドットを細かくしすぎない） 
                                 const qr = qrcode(0, 'L');
                                 
                                 // 【重要】qrData（URL文字列）を確実にそのままテキストとして追加

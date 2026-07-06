@@ -8,17 +8,15 @@
     <link rel="icon" type="image/png" href="./img/favicon-96x96.png" sizes="96x96" />
     <link rel="icon" type="image/svg+xml" href="./img/favicon.svg" />
     <link rel="shortcut icon" href="./img/favicon.ico" />
-    <link class="apple-touch-icon" sizes="180x180" href="./img/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./img/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="M-Analyzer" />
     <link rel="manifest" href="./site.webmanifest" />
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- 依存ライブラリ（ロード順を厳格化） -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
+        
         html, body {
             position: fixed;
             overflow: hidden;
@@ -27,14 +25,20 @@
             touch-action: none;
             overscroll-behavior: none;
         }
-        .panel-transition { transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+
+        .panel-transition {
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
         .glass-panel {
             background: rgba(15, 23, 42, 0.65);
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             border-top: 1px solid rgba(255, 255, 255, 0.08);
         }
-        #v-player, #mobile-preview {
+
+        /* ズーム・パン・左右反転の統合スタイル */
+        #v-player {
             will-change: transform;
             transition: transform 0.05s linear;
         }
@@ -49,70 +53,50 @@
          @touchmove="handleGlobalTouchMove($event)"
          @touchend="handleGlobalTouchEnd($event)">
         
-        <!-- ビデオメインプレビューエリア -->
         <div class="w-full flex-1 bg-black flex items-center justify-center relative z-10 pb-20 overflow-hidden"
              @touchstart="handleVideoTouchStart($event)"
              @touchmove="handleVideoTouchMove($event)"
              @touchend="handleVideoTouchEnd($event)">
             
-            <!-- 解析用ビデオプレーヤー -->
+            <!-- PC接続での配信用に自身のカメラプレビューを表示するビデオ要素（ハウリング防止のため常にMuted） -->
             <video id="v-player" 
                    playsinline 
                    webkit-playsinline
+                   muted
                    :src="videoSrc" 
                    class="w-full h-full object-contain"
                    :style="`transform: translate(${zoomX}px, ${zoomY}px) scale(${zoomScale}) scaleX(${isMirrored ? -1 : 1});`"
                    @timeupdate="updateTime" 
                    @play="isPlaying = true" 
                    @pause="isPlaying = false" 
-                   @loadedmetadata="onMetadataLoaded"
-                   x-show="videoSrc && !isQrScannerMode">
+                   @loadedmetadata="onMetadataLoaded">
             </video>
 
-            <!-- 配信・スキャン用共通カメラプレビュー -->
-            <video id="mobile-preview"
-                   playsinline
-                   webkit-playsinline
-                   muted
-                   class="w-full h-full object-cover"
-                   x-show="isQrScannerMode">
-            </video>
-
-            <!-- QRスキャン枠オーバーレイ表示 -->
-            <div class="absolute inset-0 z-20 flex flex-col items-center justify-center pointer-events-none" x-show="isQrScannerMode && !isStreaming">
-                <div class="w-64 h-64 border-4 border-accent border-dashed rounded-2xl bg-black/20 flex flex-col items-center justify-center">
-                    <span class="text-[10px] text-accent font-black tracking-widest font-mono bg-black/60 px-2 py-1 rounded">SCAN PC QR CODE</span>
-                </div>
-            </div>
-
-            <!-- 初期ランディング画面 -->
-            <div class="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-gradient-to-b from-slate-900/60 to-slate-950/90 pointer-events-auto" x-show="!videoSrc && !isQrScannerMode">
+            <!-- 初期画面：動画未読込かつPC未接続時に表示 -->
+            <div class="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-gradient-to-b from-slate-900/60 to-slate-950/90 pointer-events-auto" x-show="!videoSrc && !isPcConnected">
                 <div class="w-12 h-12 bg-gradient-to-tr from-primary to-accent rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20 mb-2">
                     <img src="./img/icon.svg" width="48">
                 </div>
                 <p class="text-[10px] font-mono mb-0">Modular Spin Lab</p>
                 <h2 class="text-sm font-black tracking-wider text-white mt-2 mb-2"><img src="./img/logo.svg" alt="MOTION ANALYZER" width="280"></h2>
-                <p class="text-[8px] opacity-40 font-mono mb-4">MOBILE beta v1.2 - 20260707</p>
+                <p class="text-[8px] opacity-40 font-mono mb-4">MOBILE beta v1.1 - 20260707</p>
                 
-                <div class="flex flex-col gap-2 w-full max-w-[180px] mx-auto">
-                    <div class="relative">
-                        <button class="btn btn-primary btn-sm w-full rounded-xl font-bold shadow-lg shadow-primary/30 text-xs">CHOOSE VIDEO</button>
-                        <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                    </div>
-                    <button @click="handleConnectionMenu" class="btn btn-outline btn-accent btn-sm w-full rounded-xl font-bold text-xs">PCと接続</button>
+                <div class="relative">
+                    <button class="btn btn-primary btn-sm rounded-xl px-5 font-bold shadow-lg shadow-primary/30 text-xs">CHOOSE VIDEO</button>
+                    <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                 </div>
             </div>
 
-            <!-- ヘッダーインフォ -->
-            <div class="absolute top-4 left-4 right-4 flex justify-between items-center z-30 pointer-events-none" x-show="videoSrc || isQrScannerMode" x-cloak>
+            <!-- ステータスインジケーター：動画読み込み時、またはPC接続成功時に表示 -->
+            <div class="absolute top-4 left-4 right-4 flex justify-between items-center z-30 pointer-events-none" x-show="videoSrc || isPcConnected" x-cloak>
                 <div class="px-2.5 py-1 bg-slate-900/80 backdrop-blur rounded-lg border border-white/5 text-[10px] font-mono flex items-center gap-1.5">
-                    <span class="w-1.5 h-1.5 rounded-full" :class="(isPlaying || isStreaming) ? 'bg-success animate-pulse' : 'bg-warning'"></span>
-                    <span class="text-white font-bold truncate max-w-[120px]" x-text="isQrScannerMode ? (isStreaming ? 'LIVE STREAMING' : 'SCANNING...') : fileName"></span>
+                    <!-- PC接続時は青色のインジケーター、通常時は再生状態に応じて変化 -->
+                    <span class="w-1.5 h-1.5 rounded-full" :class="isPcConnected ? 'bg-info' : (isPlaying ? 'bg-success animate-pulse' : 'bg-warning')"></span>
+                    <span class="text-white font-bold truncate max-w-[120px]" x-text="isPcConnected ? 'Streaming' : fileName"></span>
                 </div>
                 
-                <div class="flex gap-1.5 pointer-events-auto">
-                    <button class="btn btn-xs btn-error rounded-md px-2 h-7 font-bold text-[10px]" x-show="isQrScannerMode" @click="stopQrScanner">終了</button>
-                    <div class="relative" x-show="!isQrScannerMode">
+                <div class="flex gap-1.5 pointer-events-auto" x-show="!isPcConnected">
+                    <div class="relative">
                         <button class="btn btn-xs bg-slate-900/80 border-white/10 text-white rounded-md px-2 h-7 font-bold backdrop-blur text-[10px]">REPLACE</button>
                         <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                     </div>
@@ -120,10 +104,10 @@
             </div>
         </div>
 
-        <!-- スライド操作パネル（通常解析用） -->
+        <!-- コントロール下部シート（PC接続中、または通常の動画読み込み時に展開可能） -->
         <div class="fixed bottom-0 left-0 right-0 z-20 glass-panel panel-transition rounded-t-[24px] flex flex-col overflow-hidden shadow-2xl"
              :style="'height: 40vh; transform: translateY(' + (panelOpen ? '0' : 'calc(40vh - 78px)') + ');'"
-             x-show="videoSrc && !isQrScannerMode" x-cloak>
+             x-show="videoSrc || isPcConnected" x-cloak>
             
             <div class="w-full pt-2 flex flex-col items-center justify-center cursor-pointer select-none shrink-0"
                  @touchstart="handlePanelTouchStart($event)"
@@ -133,7 +117,8 @@
                 <div class="w-8 h-1 bg-white/20 rounded-full"></div>
             </div>
 
-            <div class="px-4 py-1.5 shrink-0 border-b border-white/5 flex items-center gap-3">
+            <!-- シークタイムライン（PC接続中の配信時は操作対象外のため非表示化） -->
+            <div class="px-4 py-1.5 shrink-0 border-b border-white/5 flex items-center gap-3" x-show="!isPcConnected">
                 <button @click="togglePlay" class="w-9 h-9 rounded-full bg-primary hover:bg-primary-focus flex items-center justify-center text-white shrink-0 shadow-md shadow-primary/20">
                     <template x-if="!isPlaying"><svg class="w-4 h-4 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></template>
                     <template x-if="isPlaying"><svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></template>
@@ -148,19 +133,16 @@
                 </div>
             </div>
 
-            <div class="flex justify-center gap-1.5 py-1 bg-slate-950/40 shrink-0">
+            <div class="flex justify-center gap-1.5 py-1 bg-slate-950/40 shrink-0" x-show="!isPcConnected">
                 <template x-for="i in maxTabs">
                     <span class="w-1 h-1 rounded-full transition-all duration-300" :class="activeTab === (i-1) ? 'bg-primary w-3' : 'bg-white/10'"></span>
                 </template>
             </div>
 
-            <!-- スワイプ式設定タブコンテナ -->
-            <div class="flex-1 w-full relative overflow-hidden bg-slate-950/10"
-                 @touchstart="handleFlickTouchStart($event)"
-                 @touchmove="handleFlickTouchMove($event)"
-                 @touchend="handleFlickTouchEnd($event)">
+            <div class="flex-1 w-full relative overflow-hidden bg-slate-950/10">
                 
-                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(0)">
+                <!-- 通常動画解析用：タブ01 -->
+                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(0)" x-show="!isPcConnected">
                     <div class="flex justify-between items-center">
                         <span class="text-[9px] font-black tracking-widest text-slate-400 font-mono">01 / CONTROLS</span>
                         <div class="flex items-center gap-2">
@@ -200,7 +182,8 @@
                     </div>
                 </div>
 
-                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(1)">
+                <!-- 通常動画解析用：タブ02 -->
+                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(1)" x-show="!isPcConnected">
                     <div class="flex justify-between items-center">
                         <span class="text-[9px] font-black tracking-widest text-slate-400 font-mono">02 / INTERVAL LOOP</span>
                         <input type="checkbox" class="toggle toggle-primary toggle-xs" x-model="loopEnabled" :disabled="startPoint === null" />
@@ -219,7 +202,8 @@
                     </div>
                 </div>
 
-                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(2)">
+                <!-- 通常動画解析用：タブ03 -->
+                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(2)" x-show="!isPcConnected">
                     <div class="flex justify-between items-center">
                         <span class="text-[9px] font-black tracking-widest text-slate-400 font-mono">03 / EXPORT</span>
                         <span class="text-[9px] font-mono text-emerald-400 font-bold">READY</span>
@@ -231,8 +215,27 @@
                         </button>
                     </div>
                 </div>
+
+                <!-- 🌐 PC連携配信中専用表示領域（フリック操作の対象外エリア） -->
+                <div class="absolute inset-0 px-4 py-6 flex flex-col justify-between bg-slate-900/20" x-show="isPcConnected" x-cloak>
+                    <div class="flex justify-between items-center border-b border-white/5 pb-2">
+                        <span class="text-[10px] font-black tracking-widest text-accent font-mono">CONNECTED TO PC</span>
+                        <span class="text-[9px] font-mono text-emerald-400 font-bold animate-pulse">STREAMING LIVE</span>
+                    </div>
+                    <p class="text-xs text-slate-400 text-center py-4 font-sans leading-relaxed">
+                        PCへのカメラ映像配信がアクティブです。<br>
+                        録画や再生などの各種操作はPC側で行ってください。
+                    </p>
+                    <div class="pt-2">
+                        <button @click="disconnectFromPc" class="btn btn-sm btn-error btn-outline w-full rounded-xl font-bold h-10 text-xs">
+                            接続を解除する
+                        </button>
+                    </div>
+                </div>
+
             </div>
         </div>
+
     </div>
 
     <script>
@@ -248,27 +251,51 @@
                 fps: 30,
                 videoElement: null,
                 isUserSeeking: false,
-                isMirrored: false,
+                isMirrored: false, // 左右反転ステート
                 
                 panelOpen: false,
                 activeTab: 0,
                 maxTabs: 3,
 
-                zoomScale: 1.0, zoomX: 0, zoomY: 0, baseScale: 1.0, baseX: 0, baseY: 0,
-                touchStartDist: 0, touchStartMidX: 0, touchStartMidY: 0, isPinching: false, lastTapTime: 0,
-                touchStartTime: 0, touchStartX: 0, touchStartY: 0, startY: 0, currentY: 0, flickStartX: 0, flickStartY: 0,
-
-                startPoint: null, endPoint: null, loopEnabled: false,
-
-                isQrScannerMode: false,
-                isStreaming: false,
-                localStream: null,
+                // 🌐 WebRTC接続用管理ステートを追加
+                isPcConnected: false,
+                topicId: '',
                 peerConnection: null,
-                scanAnimationId: null,
-                ntfyTopic: '', // 追加：通信用トピック名
+                localStream: null,
+
+                // ズーム・パン用ステート
+                zoomScale: 1.0,
+                zoomX: 0,
+                zoomY: 0,
+                baseScale: 1.0,
+                baseX: 0,
+                baseY: 0,
+                touchStartDist: 0,
+                touchStartMidX: 0,
+                touchStartMidY: 0,
+                isPinching: false,
+                lastTapTime: 0,
+
+                // シングルタップ連動用
+                touchStartTime: 0,
+                touchStartX: 0,
+                touchStartY: 0,
+
+                // フリック・シート用
+                startY: 0,
+                currentY: 0,
+                flickStartX: 0,
+                flickStartY: 0,
+
+                // 既存のインターバルループ用ステート
+                startPoint: null,
+                endPoint: null,
+                loopEnabled: false,
 
                 initApp() {
                     this.fps = parseInt(localStorage.getItem('local_controller_fps') || '30');
+                    this.videoElement = document.getElementById('v-player');
+                    
                     let lastTouchEnd = 0;
                     document.addEventListener('touchend', (e) => {
                         const now = (new Date()).getTime();
@@ -276,314 +303,386 @@
                         lastTouchEnd = now;
                     }, false);
 
-                    // URLに直接SDPまたはトピックIDが含まれる場合の自動接続処理
+                    // URLパラメータからroom(ntfyのトピックID)が渡されているかチェックしてシグナリング開始
                     const urlParams = new URLSearchParams(window.location.search);
-                    const sdpParam = urlParams.get('sdp');
-                    const topicParam = urlParams.get('topic'); // 【変更】直接ntfyトピックを受け取るルートに対応
-
-                    if (sdpParam || topicParam) {
-                        this.$nextTick(() => {
-                            this.connectToPc(sdpParam || topicParam);
-                        });
+                    const room = urlParams.get('room');
+                    if (room) {
+                        this.topicId = room;
+                        this.connectToPc();
                     }
                 },
 
-                // 【追加】「PCと接続」が押された際のルーティングメニュー
-                handleConnectionMenu() {
-                    const choice = confirm("接続方法を選択してください。\n\n【OK】: カメラでPCのQRコードをスキャンする\n【キャンセル】: PCに表示された4桁のコードを手動入力する");
-                    if (choice) {
-                        this.startQrScanner();
-                    } else {
-                        const code = prompt("PC画面に表示されている4桁の接続コードを入力してください:");
-                        if (code && code.trim().length === 4) {
-                            this.connectToPc(code.trim());
-                        } else if (code) {
-                            alert("コードは4桁の数字で入力してください。");
-                        }
-                    }
-                },
-
-                async startQrScanner() {
-                    this.isQrScannerMode = true;
-                    this.isStreaming = false;
-                    if(this.videoSrc) { URL.revokeObjectURL(this.videoSrc); this.videoSrc = ''; }
-
+                // 🌐 WebRTC経由でPCへの配信を開始するロジック
+                async connectToPc() {
                     try {
+                        // 音声および背面高画質カメラのストリームを取得
                         this.localStream = await navigator.mediaDevices.getUserMedia({
-                            video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
-                            audio: false
+                            video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+                            audio: true
                         });
+                        
+                        // モバイル画面側にも自身のプレビューを投影
+                        this.videoElement.srcObject = this.localStream;
+                        this.videoElement.play().catch(err => console.log(err));
+                        this.panelOpen = true;
 
-                        const previewVideo = document.getElementById('mobile-preview');
-                        previewVideo.srcObject = this.localStream;
-                        previewVideo.play();
-
-                        const canvas = document.createElement('canvas');
-                        const ctx = canvas.getContext('2d');
-
-                        const scanLoop = () => {
-                            if (!this.isQrScannerMode || this.isStreaming) return;
-                            
-                            if (previewVideo.readyState === previewVideo.HAVE_ENOUGH_DATA) {
-                                canvas.width = previewVideo.videoWidth;
-                                canvas.height = previewVideo.videoHeight;
-                                ctx.drawImage(previewVideo, 0, 0, canvas.width, canvas.height);
-                                
-                                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                                const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                                    inversionAttempts: "dontInvert",
-                                });
-
-                                if (code) {
-                                    this.connectToPc(code.data);
-                                    return;
+                        // シグナリング通知受信(ntfy)のリスナーを設定
+                        const eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
+                        eventSource.onmessage = async (e) => {
+                            const data = JSON.parse(e.data);
+                            if (data.event === 'offer') {
+                                await this.handleOffer(data.offer);
+                            } else if (data.event === 'candidate' && data.candidate) {
+                                if (this.peerConnection) {
+                                    await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
                                 }
                             }
-                            this.scanAnimationId = requestAnimationFrame(scanLoop);
                         };
-                        this.scanAnimationId = requestAnimationFrame(scanLoop);
-
                     } catch (err) {
-                        alert("カメラの起動に失敗しました。HTTPS環境または権限を確認してください。");
-                        this.isQrScannerMode = false;
+                        alert("カメラ・マイクのアクセス許可が必要です: " + err.message);
                     }
                 },
 
-                // 【大幅改修】ntfy.shを経由してOfferを取得し、Answerを返すP2P接続コアロジック
-                async connectToPc(rawInput) {
-                    this.isStreaming = true;
-                    if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
+                async handleOffer(offer) {
+                    this.peerConnection = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                    });
 
-                    // 1. ローカルのカメラ映像ストリームがまだ立ち上がっていない場合は起動（手動接続・URL起動用）
-                    if (!this.localStream) {
-                        try {
-                            this.isQrScannerMode = true;
-                            this.localStream = await navigator.mediaDevices.getUserMedia({
-                                video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
-                                audio: false
+                    this.peerConnection.onicecandidate = (e) => {
+                        if (e.candidate) {
+                            fetch(`https://ntfy.sh/${this.topicId}`, {
+                                method: 'POST',
+                                body: JSON.stringify({ event: 'candidate', candidate: e.candidate })
                             });
-                            const previewVideo = document.getElementById('mobile-preview');
-                            previewVideo.srcObject = this.localStream;
-                            previewVideo.play();
-                        } catch (camErr) {
-                            alert("配信用のカメラ起動に失敗しました。カメラパーミッションを許可してください。");
-                            this.stopQrScanner();
-                            return;
                         }
-                    }
+                    };
 
-                    try {
-                        let targetTopic = "";
-                        let base64Sdp = "";
+                    // トラックにローカル配信ストリームを追加
+                    this.localStream.getTracks().forEach(track => {
+                        this.peerConnection.addTrack(track, this.localStream);
+                    });
 
-                        // A. 入力がURLの場合 (QR読取や標準カメラアプリからのインバウンド)
-                        if (rawInput.startsWith('http://') || rawInput.startsWith('https://')) {
-                            const urlObj = new URL(rawInput);
-                            if (urlObj.searchParams.has('topic')) {
-                                targetTopic = urlObj.searchParams.get('topic');
-                            } else if (urlObj.searchParams.has('sdp')) {
-                                base64Sdp = urlObj.searchParams.get('sdp');
-                            }
-                        } 
-                        // B. 入力が4桁のコード（トピックIDの直打ち）の場合
-                        else if (rawInput.length === 4 && /^\d+$/.test(rawInput)) {
-                            targetTopic = `msl-ma-${rawInput}`;
-                        } 
-                        // C. レガシーな生SDPデータの場合
-                        else {
-                            base64Sdp = rawInput;
-                        }
+                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                    const answer = await this.peerConnection.createAnswer();
+                    await this.peerConnection.setLocalDescription(answer);
 
-                        // トピックIDが特定できた場合、ntfy.shからPCのOfferをダウンロードする
-                        if (targetTopic) {
-                            this.ntfyTopic = targetTopic;
-                            const res = await fetch(`https://ntfy.sh/${this.ntfyTopic}/json?poll=1`);
-                            const data = await res.text();
-                            // ntfyのブロードキャストから最後の有効なメッセージ(Offer)を探す
-                            const lines = data.trim().split('\n');
-                            for (let i = lines.length - 1; i >= 0; i--) {
-                                if (!lines[i]) continue;
-                                const msgObj = JSON.parse(lines[i]);
-                                if (msgObj.event === 'message' && msgObj.message) {
-                                    base64Sdp = msgObj.message;
-                                    break;
-                                }
-                            }
-                        }
+                    // PCへAnswerをシグナリング送信
+                    fetch(`https://ntfy.sh/${this.topicId}`, {
+                        method: 'POST',
+                        body: JSON.stringify({ event: 'answer', answer: answer })
+                    });
 
-                        if (!base64Sdp) {
-                            throw new Error("PC側からの有効な接続データが見つかりませんでした。");
-                        }
-
-                        // SDP文字列の復元（解凍処理）
-                        let pcSdp = "";
-                        const binaryString = atob(base64Sdp);
-                        try {
-                            const len = binaryString.length;
-                            const bytes = new Uint8Array(len);
-                            for (let i = 0; i < len; i++) { bytes[i] = binaryString.charCodeAt(i); }
-                            const inflated = pako.inflate(bytes);
-                            pcSdp = new TextDecoder().decode(inflated);
-                        } catch (pakoErr) {
-                            pcSdp = decodeURIComponent(escape(binaryString));
-                        }
-
-                        // WebRTCピア接続の初期化
-                        this.peerConnection = new RTCPeerConnection({
-                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                        });
-
-                        this.localStream.getTracks().forEach(track => {
-                            this.peerConnection.addTrack(track, this.localStream);
-                        });
-
-                        await this.peerConnection.setRemoteDescription(new RTCSessionDescription({
-                            type: 'offer',
-                            sdp: pcSdp
-                        }));
-
-                        const answer = await this.peerConnection.createAnswer();
-                        await this.peerConnection.setLocalDescription(answer);
-
-                        // --- 【超重要】生成したAnswerをntfy.sh経由でPCにプッシュバックする ---
-                        let rawAnswerData = "";
-                        try {
-                            const u8Array = new TextEncoder().encode(answer.sdp);
-                            const compressed = pako.deflate(u8Array);
-                            rawAnswerData = btoa(String.fromCharCode.apply(null, compressed));
-                        } catch(e) {
-                            rawAnswerData = btoa(unescape(encodeURIComponent(answer.sdp)));
-                        }
-
-                        // トピックがまだ無ければ一時的なものを定義（基本はPC版生成のものを使用）
-                        if (!this.ntfyTopic) {
-                            this.ntfyTopic = "msl-ma-fallback";
-                        }
-
-                        // PC宛てに伝言板へAnswerを書き込む
-                        await fetch(`https://ntfy.sh/${this.ntfyTopic}`, {
-                            method: 'POST',
-                            body: rawAnswerData,
-                            headers: { 'X-Title': 'ANSWER_SDP' }
-                        });
-
-                    } catch (e) {
-                        alert("接続に失敗しました: " + e.message);
-                        this.stopQrScanner();
-                    }
+                    this.isPcConnected = true;
                 },
 
-                stopQrScanner() {
-                    this.isQrScannerMode = false;
-                    this.isStreaming = false;
-                    if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
-                    if (this.localStream) this.localStream.getTracks().forEach(t => t.stop());
-                    this.localStream = null;
-                    if (this.peerConnection) this.peerConnection.close();
-                    this.peerConnection = null;
-                    this.ntfyTopic = '';
+                disconnectFromPc() {
+                    if (this.peerConnection) {
+                        this.peerConnection.close();
+                        this.peerConnection = null;
+                    }
+                    if (this.localStream) {
+                        this.localStream.getTracks().forEach(track => track.stop());
+                        this.localStream = null;
+                    }
+                    this.videoElement.srcObject = null;
+                    this.isPcConnected = false;
+                    this.panelOpen = false;
+                    // URLパラメータをクリアして初期画面へ
+                    window.history.replaceState({}, document.title, window.location.pathname);
                 },
 
+                // 🔍 動画エリアのジェスチャーハンドラー（シングルタップ再生・ピンチ・ダブルタップ）
                 handleVideoTouchStart(e) {
-                    if (!this.videoSrc && !this.isQrScannerMode) return;
+                    if (!this.videoSrc && !this.isPcConnected) return;
+
                     const now = Date.now();
-                    if (e.touches.length === 1) { this.touchStartTime = now; this.touchStartX = e.touches[0].clientX; this.touchStartY = e.touches[0].clientY; }
-                    if (e.touches.length === 1 && (now - this.lastTapTime < 300)) { this.resetZoom(); this.touchStartTime = 0; this.lastTapTime = 0; return; }
+                    
+                    // タップ連動（再生/一時停止）の判定用初期位置
+                    if (e.touches.length === 1) {
+                        this.touchStartTime = now;
+                        this.touchStartX = e.touches[0].clientX;
+                        this.touchStartY = e.touches[0].clientY;
+                    }
+
+                    // ダブルタップ検知（リセット用）
+                    if (e.touches.length === 1 && (now - this.lastTapTime < 300)) {
+                        this.resetZoom();
+                        this.touchStartTime = 0; // ダブルタップ時はシングルタップ処理を相殺
+                        this.lastTapTime = 0;
+                        return;
+                    }
                     if (e.touches.length === 1) { this.lastTapTime = now; }
+
+                    // ピンチイン・アウト開始
                     if (e.touches.length === 2) {
-                        this.isPinching = true; const t1 = e.touches[0]; const t2 = e.touches[1];
+                        this.isPinching = true;
+                        const t1 = e.touches[0];
+                        const t2 = e.touches[1];
+                        
                         this.touchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-                        this.touchStartMidX = (t1.clientX + t2.clientX) / 2; this.touchStartMidY = (t1.clientY + t2.clientY) / 2;
-                        this.baseScale = this.zoomScale; this.baseX = this.zoomX; this.baseY = this.zoomY;
+                        this.touchStartMidX = (t1.clientX + t2.clientX) / 2;
+                        this.touchStartMidY = (t1.clientY + t2.clientY) / 2;
+                        
+                        this.baseScale = this.zoomScale;
+                        this.baseX = this.zoomX;
+                        this.baseY = this.zoomY;
                     }
                 },
+
                 handleVideoTouchMove(e) {
-                    if (!this.videoSrc && !this.isQrScannerMode) return;
+                    if (!this.videoSrc && !this.isPcConnected) return;
+
+                    // 指が大きく動いた場合はシングルタップ再生判定をキャンセル
                     if (e.touches.length === 1 && this.touchStartTime > 0) {
-                        const moveX = Math.abs(e.touches[0].clientX - this.touchStartX); const moveY = Math.abs(e.touches[0].clientY - this.touchStartY);
+                        const moveX = Math.abs(e.touches[0].clientX - this.touchStartX);
+                        const moveY = Math.abs(e.touches[0].clientY - this.touchStartY);
                         if (moveX > 10 || moveY > 10) { this.touchStartTime = 0; }
                     }
+
                     if (!this.isPinching) return;
+
                     if (e.touches.length === 2) {
-                        const t1 = e.touches[0]; const t2 = e.touches[1];
+                        const t1 = e.touches[0];
+                        const t2 = e.touches[1];
+
                         const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-                        const currentMidX = (t1.clientX + t2.clientX) / 2; const currentMidY = (t1.clientY + t2.clientY) / 2;
-                        if (this.touchStartDist > 0) { const factor = currentDist / this.touchStartDist; this.zoomScale = Math.min(Math.max(this.baseScale * factor, 1.0), 5.0); }
-                        if (this.zoomScale > 1.0) { this.zoomX = this.baseX + (currentMidX - this.touchStartMidX); this.zoomY = this.baseY + (currentMidY - this.touchStartMidY); }
-                        else { this.zoomX = 0; this.zoomY = 0; }
+                        const currentMidX = (t1.clientX + t2.clientX) / 2;
+                        const currentMidY = (t1.clientY + t2.clientY) / 2;
+
+                        if (this.touchStartDist > 0) {
+                            const factor = currentDist / this.touchStartDist;
+                            this.zoomScale = Math.min(Math.max(this.baseScale * factor, 1.0), 5.0);
+                        }
+
+                        if (this.zoomScale > 1.0) {
+                            const dragX = currentMidX - this.touchStartMidX;
+                            const dragY = currentMidY - this.touchStartMidY;
+                            this.zoomX = this.baseX + dragX;
+                            this.zoomY = this.baseY + dragY;
+                        } else {
+                            this.zoomX = 0;
+                            this.zoomY = 0;
+                        }
                     }
                 },
+
                 handleVideoTouchEnd(e) {
                     const now = Date.now();
-                    if (this.touchStartTime > 0 && (now - this.touchStartTime < 250) && e.touches.length === 0 && !this.isPinching) {
-                        setTimeout(() => { if (Date.now() - this.lastTapTime >= 280) { if(!this.isQrScannerMode) this.togglePlay(); } }, 50);
+                    
+                    // 👆 シングルタップ連動の確定判定（配信時以外に再生/一時停止をトリガー）
+                    if (!this.isPcConnected && this.touchStartTime > 0 && (now - this.touchStartTime < 250) && e.touches.length === 0 && !this.isPinching) {
+                        setTimeout(() => {
+                            if (Date.now() - this.lastTapTime >= 280) {
+                                this.togglePlay();
+                            }
+                        }, 50);
                     }
                     this.touchStartTime = 0;
-                    if (e.touches.length < 2) { this.isPinching = false; if (this.zoomScale <= 1.0) { this.zoomScale = 1.0; this.zoomX = 0; this.zoomY = 0; } }
+
+                    if (e.touches.length < 2) {
+                        this.isPinching = false;
+                        if (this.zoomScale <= 1.0) {
+                            this.zoomScale = 1.0;
+                            this.zoomX = 0;
+                            this.zoomY = 0;
+                        }
+                    }
                 },
-                resetZoom() { this.zoomScale = 1.0; this.zoomX = 0; this.zoomY = 0; },
-                handleGlobalTouchStart(e) { this.flickStartX = e.touches[0].clientX; this.flickStartY = e.touches[0].clientY; },
-                handleGlobalTouchMove(e) { if (this.flickStartX < 30 || this.flickStartX > window.innerWidth - 30) { e.preventDefault(); } },
+
+                resetZoom() {
+                    this.zoomScale = 1.0;
+                    this.zoomX = 0;
+                    this.zoomY = 0;
+                },
+
+                // グローバルフリック防止等
+                handleGlobalTouchStart(e) {
+                    this.flickStartX = e.touches[0].clientX;
+                    this.flickStartY = e.touches[0].clientY;
+                },
+                handleGlobalTouchMove(e) {
+                    if (this.flickStartX < 30 || this.flickStartX > window.innerWidth - 30) {
+                        e.preventDefault();
+                    }
+                },
+                handleGlobalTouchEnd(e) {},
+
                 handlePanelTouchStart(e) { this.startY = e.touches[0].clientY; },
-                handlePanelTouchMove(e) { this.currentY = e.touches[0].clientY; let diff = this.startY - this.currentY; if (diff > 40 && !this.panelOpen) { this.panelOpen = true; } else if (diff < -40 && this.panelOpen) { this.panelOpen = false; } },
-                handleFlickTouchStart(e) { this.flickStartX = e.touches[0].clientX; this.flickStartY = e.touches[0].clientY; },
-                handleFlickTouchEnd(e) {
-                    let diffX = e.changedTouches[0].clientX - this.flickStartX; let diffY = e.changedTouches[0].clientY - this.flickStartY;
-                    if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 60) { if (diffX > 0 && this.activeTab > 0) { this.activeTab--; } else if (diffX < 0 && this.activeTab < this.maxTabs - 1) { this.activeTab++; } }
+                handlePanelTouchMove(e) {
+                    this.currentY = e.touches[0].clientY;
+                    let diff = this.startY - this.currentY;
+                    if (diff > 40 && !this.panelOpen) { this.panelOpen = true; } 
+                    else if (diff < -40 && this.panelOpen) { this.panelOpen = false; }
                 },
-                getPanelStyle(index) { let offset = (index - this.activeTab) * 100; let opacity = index === this.activeTab ? 1 : 0; let pointerEvents = index === this.activeTab ? 'auto' : 'none'; return `transform: translateX(${offset}%); opacity: ${opacity}; pointer-events: ${pointerEvents};`; },
+                handlePanelTouchEnd(e) {},
+
+                handleFlickTouchStart(e) {
+                    if (this.isPcConnected) return; // PC配信中は無効
+                    this.flickStartX = e.touches[0].clientX;
+                    this.flickStartY = e.touches[0].clientY;
+                },
+                handleFlickTouchMove(e) {},
+                handleFlickTouchEnd(e) {
+                    if (this.isPcConnected) return; // PC配信中は無効
+                    let diffX = e.changedTouches[0].clientX - this.flickStartX;
+                    let diffY = e.changedTouches[0].clientY - this.flickStartY;
+
+                    if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 60) {
+                        if (diffX > 0 && this.activeTab > 0) { this.activeTab--; } 
+                        else if (diffX < 0 && this.activeTab < this.maxTabs - 1) { this.activeTab++; }
+                    }
+                },
+
+                getPanelStyle(index) {
+                    let offset = (index - this.activeTab) * 100;
+                    let opacity = index === this.activeTab ? 1 : 0;
+                    let pointerEvents = index === this.activeTab ? 'auto' : 'none';
+                    return `transform: translateX(${offset}%); opacity: ${opacity}; pointer-events: ${pointerEvents};`;
+                },
+
+                // 🔄 ファイルインポート（CHOOSE VIDEO / REPLACE 共通ロジック）
                 handleFileSelect(e) {
-                    const file = e.target.files[0]; if (!file) return;
-                    if (this.videoElement) { this.videoElement.pause(); } this.isPlaying = false;
-                    this.originalFile = file; this.fileName = file.name;
-                    if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); } this.videoSrc = URL.createObjectURL(file);
-                    this.currentSpeed = 1.0; this.currentTime = 0; this.isMirrored = false; this.clearLoop(); this.resetZoom(); this.panelOpen = true;
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    if (this.videoElement) {
+                        this.videoElement.pause();
+                    }
+                    this.isPlaying = false;
+
+                    this.originalFile = file;
+                    this.fileName = file.name;
+                    
+                    if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
+                    this.videoSrc = URL.createObjectURL(file);
+                    
+                    // 🧹 全状態をきれいな初期状態へ完全リセット
+                    this.currentSpeed = 1.0;
+                    this.currentTime = 0;
+                    this.isMirrored = false;
+                    this.clearLoop();
+                    this.resetZoom();
+                    this.panelOpen = true;
+                    
                     this.$nextTick(() => {
                         this.videoElement = document.getElementById('v-player');
                         this.videoElement.playbackRate = this.currentSpeed;
-                        this.videoElement.play().catch(err => console.log("Auto-play blocked", err));
+                        this.videoElement.setAttribute('playsinline', 'true');
+                        this.videoElement.setAttribute('webkit-playsinline', 'true');
+                        
+                        this.videoElement.play().catch(err => {
+                            console.log("Auto-play prevented, requiring interaction", err);
+                        });
                     });
                 },
+
                 onMetadataLoaded(e) { this.duration = e.target.duration; },
-                togglePlay() { if (!this.videoElement) return; if (this.isPlaying) { this.videoElement.pause(); } else { this.videoElement.play(); } },
+                togglePlay() {
+                    if (!this.videoElement || this.isPcConnected) return;
+                    if (this.isPlaying) { this.videoElement.pause(); } 
+                    else { this.videoElement.play(); }
+                },
+
                 updateTime(e) {
+                    if (this.isPcConnected) return;
                     if (!this.isUserSeeking) { this.currentTime = e.target.currentTime; }
                     if (this.loopEnabled && this.startPoint !== null && this.endPoint !== null) {
-                        if (e.target.currentTime >= this.endPoint) { this.videoElement.currentTime = this.startPoint; this.currentTime = this.startPoint; }
+                        if (e.target.currentTime >= this.endPoint) {
+                            this.videoElement.currentTime = this.startPoint;
+                            this.currentTime = this.startPoint;
+                        }
                     }
                 },
-                onSeek() { if (!this.videoElement) return; this.isUserSeeking = true; this.videoElement.currentTime = this.currentTime; this.isUserSeeking = false; },
+
+                onSeek() {
+                    if (!this.videoElement || this.isPcConnected) return;
+                    this.isUserSeeking = true;
+                    this.videoElement.currentTime = this.currentTime;
+                    this.isUserSeeking = false;
+                },
+
                 setStartPoint() {
-                    if (!this.videoElement) return; this.startPoint = this.videoElement.currentTime;
-                    if (this.endPoint !== null && this.startPoint >= this.endPoint) { this.endPoint = null; this.loopEnabled = false; }
+                    if (!this.videoElement || this.isPcConnected) return;
+                    this.startPoint = this.videoElement.currentTime;
+                    if (this.endPoint !== null && this.startPoint >= this.endPoint) {
+                        this.endPoint = null;
+                        this.loopEnabled = false;
+                    }
                     if (this.startPoint !== null && this.endPoint !== null) { this.loopEnabled = true; }
                 },
+
                 setEndPoint() {
-                    if (!this.videoElement) return; const targetTime = this.videoElement.currentTime;
-                    if (this.startPoint !== null && targetTime <= this.startPoint) { alert("B点はA点より後ろに指定してください。"); return; }
-                    this.endPoint = targetTime; if (this.startPoint !== null) { this.loopEnabled = true; }
+                    if (!this.videoElement || this.isPcConnected) return;
+                    const targetTime = this.videoElement.currentTime;
+                    if (this.startPoint !== null && targetTime <= this.startPoint) {
+                        alert("B点はA点より後ろに指定してください。");
+                        return;
+                    }
+                    this.endPoint = targetTime;
+                    if (this.startPoint !== null) { this.loopEnabled = true; }
                 },
-                jumpToStart() { if (!this.videoElement || this.startPoint === null) return; this.videoElement.currentTime = this.startPoint; this.currentTime = this.startPoint; },
-                clearLoop() { this.startPoint = null; this.endPoint = null; this.loopEnabled = false; },
+
+                letJumpToStart() {
+                    if (!this.videoElement || this.startPoint === null || this.isPcConnected) return;
+                    this.videoElement.currentTime = this.startPoint;
+                    this.currentTime = this.startPoint;
+                },
+
+                clearLoop() {
+                    this.startPoint = null;
+                    this.endPoint = null;
+                    this.loopEnabled = false;
+                },
+
                 stepFrame(direction) {
-                    if (!this.videoElement) return; this.videoElement.pause();
-                    const frameDuration = 1 / this.fps; let newTime = this.videoElement.currentTime + (direction * frameDuration);
-                    if (newTime < 0) newTime = 0; if (newTime > this.duration) newTime = this.duration;
-                    this.videoElement.currentTime = newTime; this.currentTime = newTime;
+                    if (!this.videoElement || this.isPcConnected) return;
+                    this.videoElement.pause();
+                    const frameDuration = 1 / this.fps;
+                    let newTime = this.videoElement.currentTime + (direction * frameDuration);
+                    if (newTime < 0) newTime = 0;
+                    if (newTime > this.duration) newTime = this.duration;
+                    this.videoElement.currentTime = newTime;
+                    this.currentTime = newTime;
                 },
-                changeSpeed() { if (this.videoElement) { this.videoElement.playbackRate = this.currentSpeed; } },
-                adjustSpeed(amount) { this.currentSpeed = Math.min(Math.max(this.currentSpeed + amount, 0.25), 2.0); this.changeSpeed(); },
-                setSpeed(speed) { this.currentSpeed = speed; this.changeSpeed(); },
+
+                changeSpeed() {
+                    if (this.videoElement && !this.isPcConnected) { this.videoElement.playbackRate = this.currentSpeed; }
+                },
+
+                adjustSpeed(amount) {
+                    if (this.isPcConnected) return;
+                    this.currentSpeed = Math.min(Math.max(this.currentSpeed + amount, 0.25), 2.0);
+                    this.changeSpeed();
+                },
+
+                setSpeed(speed) {
+                    if (this.isPcConnected) return;
+                    this.currentSpeed = speed;
+                    this.changeSpeed();
+                },
+
                 formatTime(seconds) {
                     if (isNaN(seconds)) return "00:00.00";
-                    const m = Math.floor(seconds / 60); const s = Math.floor(seconds % 60); const ms = Math.floor((seconds % 1) * 100);
+                    const m = Math.floor(seconds / 60);
+                    const s = Math.floor(seconds % 60);
+                    const ms = Math.floor((seconds % 1) * 100);
                     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
                 },
-                saveSettings() { localStorage.setItem('local_controller_fps', this.fps.toString()); },
+
+                saveSettings() {
+                    localStorage.setItem('local_controller_fps', this.fps.toString());
+                },
+
                 exportFullVideo() {
-                    if (!this.originalFile) return;
-                    const blobUrl = URL.createObjectURL(this.originalFile); const a = document.createElement('a');
-                    a.href = blobUrl; a.download = `original_${this.fileName}`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(blobUrl);
+                    if (!this.originalFile || this.isPcConnected) return;
+                    const blobUrl = URL.createObjectURL(this.originalFile);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `original_${this.fileName}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
                 }
             }
         }

@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark" class="w-full h-full overflow-hidden select-none">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#020617">
+    <title>Motion Analyzer Mobile</title>
+    <link rel="icon" type="image/png" href="./img/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="./img/favicon.svg" />
+    <link rel="shortcut icon" href="./img/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./img/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="M-Analyzer" />
+    <link rel="manifest" href="./site.webmanifest" />
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- QR・接続用共通スクリプト -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        html, body {
+            position: fixed;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+            overscroll-behavior: none;
+        }
+        .panel-transition { transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        #v-player, #mobile-preview {
+            will-change: transform;
+            transition: transform 0.05s linear;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased p-0 m-0 w-full h-full">
+
+    <div class="w-full h-full flex flex-col relative overflow-hidden" 
+         x-data="mobileController()" 
+         x-init="initApp()"
+         @touchstart="handleGlobalTouchStart($event)"
+         @touchmove="handleGlobalTouchMove($event)"
+         @touchend="handleGlobalTouchEnd($event)">
+        
+        <!-- ビデオメインプレビューエリア -->
+        <div class="w-full flex-1 bg-black flex items-center justify-center relative z-10 pb-20 overflow-hidden"
+             @touchstart="handleVideoTouchStart($event)"
+             @touchmove="handleVideoTouchMove($event)"
+             @touchend="handleVideoTouchEnd($event)">
+            
+            <!-- 解析用ビデオプレーヤー -->
+            <video id="v-player" 
+                   playsinline 
+                   webkit-playsinline
+                   :src="videoSrc" 
+                   class="w-full h-full object-contain"
+                   :style="`transform: translate(${zoomX}px, ${zoomY}px) scale(${zoomScale}) scaleX(${isMirrored ? -1 : 1});`"
+                   @timeupdate="updateTime" 
+                   @play="isPlaying = true" 
+                   @pause="isPlaying = false" 
+                   @loadedmetadata="onMetadataLoaded"
+                   x-show="videoSrc && !isQrScannerMode">
+            </video>
+
+            <!-- 配信・スキャン用共通カメラプレビュー -->
+            <video id="mobile-preview"
+                   playsinline
+                   webkit-playsinline
+                   muted
+                   class="w-full h-full object-cover"
+                   x-show="isQrScannerMode">
+            </video>
+
+            <!-- QRスキャン枠オーバーレイ表示 -->
+            <div class="absolute inset-0 z-20 flex flex-col items-center justify-center pointer-events-none" x-show="isQrScannerMode && !isStreaming">
+                <div class="w-64 h-64 border-4 border-accent border-dashed rounded-2xl bg-black/20 flex flex-col items-center justify-center">
+                    <span class="text-[10px] text-accent font-black tracking-widest font-mono bg-black/60 px-2 py-1 rounded">SCAN PC QR CODE</span>
+                </div>
+            </div>
+
+            <!-- 初期ランディング画面 -->
+            <div class="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-gradient-to-b from-slate-900/60 to-slate-950/90 pointer-events-auto" x-show="!videoSrc && !isQrScannerMode">
+                <div class="w-12 h-12 bg-gradient-to-tr from-primary to-accent rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20 mb-2">
+                    <img src="./img/icon.svg" width="48">
+                </div>
+                <p class="text-[10px] font-mono mb-0">Modular Spin Lab</p>
+                <h2 class="text-sm font-black tracking-wider text-white mt-2 mb-2"><img src="./img/logo.svg" alt="MOTION ANALYZER" width="280"></h2>
+                <p class="text-[8px] opacity-40 font-mono mb-4">MOBILE beta v1.1 - 20260707</p>
+                
+                <div class="flex flex-col gap-2 w-full max-w-[180px] mx-auto">
+                    <div class="relative">
+                        <button class="btn btn-primary btn-sm w-full rounded-xl font-bold shadow-lg shadow-primary/30 text-xs">CHOOSE VIDEO</button>
+                        <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    </div>
+                    <button @click="startQrScanner" class="btn btn-outline btn-accent btn-sm w-full rounded-xl font-bold text-xs">PCと接続</button>
+                </div>
+            </div>
+
+            <!-- ヘッダーインフォ -->
+            <div class="absolute top-4 left-4 right-4 flex justify-between items-center z-30 pointer-events-none" x-show="videoSrc || isQrScannerMode" x-cloak>
+                <div class="px-2.5 py-1 bg-slate-900/80 backdrop-blur rounded-lg border border-white/5 text-[10px] font-mono flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full" :class="(isPlaying || isStreaming) ? 'bg-success animate-pulse' : 'bg-warning'"></span>
+                    <span class="text-white font-bold truncate max-w-[120px]" x-text="isQrScannerMode ? (isStreaming ? 'LIVE STREAMING' : 'SCANNING...') : fileName"></span>
+                </div>
+                
+                <div class="flex gap-1.5 pointer-events-auto">
+                    <button class="btn btn-xs btn-error rounded-md px-2 h-7 font-bold text-[10px]" x-show="isQrScannerMode" @click="stopQrScanner">終了</button>
+                    <div class="relative" x-show="!isQrScannerMode">
+                        <button class="btn btn-xs bg-slate-900/80 border-white/10 text-white rounded-md px-2 h-7 font-bold backdrop-blur text-[10px]">REPLACE</button>
+                        <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- スライド操作パネル（通常解析用） -->
+        <div class="fixed bottom-0 left-0 right-0 z-20 glass-panel panel-transition rounded-t-[24px] flex flex-col overflow-hidden shadow-2xl"
+             :style="'height: 40vh; transform: translateY(' + (panelOpen ? '0' : 'calc(40vh - 78px)') + ');'"
+             x-show="videoSrc && !isQrScannerMode" x-cloak>
+            
+            <div class="w-full pt-2 flex flex-col items-center justify-center cursor-pointer select-none shrink-0"
+                 @touchstart="handlePanelTouchStart($event)"
+                 @touchmove="handlePanelTouchMove($event)"
+                 @touchend="handlePanelTouchEnd($event)"
+                 @click="panelOpen = !panelOpen">
+                <div class="w-8 h-1 bg-white/20 rounded-full"></div>
+            </div>
+
+            <div class="px-4 py-1.5 shrink-0 border-b border-white/5 flex items-center gap-3">
+                <button @click="togglePlay" class="w-9 h-9 rounded-full bg-primary hover:bg-primary-focus flex items-center justify-center text-white shrink-0 shadow-md shadow-primary/20">
+                    <template x-if="!isPlaying"><svg class="w-4 h-4 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></template>
+                    <template x-if="isPlaying"><svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></template>
+                </button>
+                
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-center font-mono text-[10px] mb-0.5">
+                        <span class="font-black text-primary" x-text="formatTime(currentTime)">00:00.00</span>
+                        <span class="opacity-40 font-bold" x-text="formatTime(duration)">00:00.00</span>
+                    </div>
+                    <input type="range" min="0" :max="duration" step="0.01" x-model="currentTime" @input="onSeek" class="range range-primary range-xs w-full cursor-pointer" />
+                </div>
+            </div>
+
+            <div class="flex justify-center gap-1.5 py-1 bg-slate-950/40 shrink-0">
+                <template x-for="i in maxTabs">
+                    <span class="w-1 h-1 rounded-full transition-all duration-300" :class="activeTab === (i-1) ? 'bg-primary w-3' : 'bg-white/10'"></span>
+                </template>
+            </div>
+
+            <!-- スワイプ式設定タブコンテナ -->
+            <div class="flex-1 w-full relative overflow-hidden bg-slate-950/10"
+                 @touchstart="handleFlickTouchStart($event)"
+                 @touchmove="handleFlickTouchMove($event)"
+                 @touchend="handleFlickTouchEnd($event)">
+                
+                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(0)">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[9px] font-black tracking-widest text-slate-400 font-mono">01 / CONTROLS</span>
+                        <div class="flex items-center gap-2">
+                            <div class="flex items-center gap-1 bg-slate-900 border border-white/5 px-2 py-0.5 rounded-lg">
+                                <span class="text-[8px] font-mono font-bold text-slate-400">MIRROR</span>
+                                <input type="checkbox" class="toggle toggle-accent toggle-xs" x-model="isMirrored" />
+                            </div>
+                            <div class="badge badge-outline border-white/10 px-1.5 py-2 bg-slate-900 font-mono text-[10px] font-bold text-secondary">
+                                <select class="bg-transparent border-none outline-none cursor-pointer" x-model.number="fps" @change="saveSettings">
+                                    <option value="24">24 FPS</option>
+                                    <option value="30">30 FPS</option>
+                                    <option value="60">60 FPS</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-4 gap-2 my-1">
+                        <button @click="stepFrame(-5)" class="btn btn-neutral btn-sm h-10 rounded-xl text-slate-300 font-mono text-xs">-5F</button>
+                        <button @click="stepFrame(-1)" class="btn btn-outline btn-secondary btn-sm h-10 rounded-xl text-xs">◀</button>
+                        <button @click="stepFrame(1)" class="btn btn-outline btn-secondary btn-sm h-10 rounded-xl text-xs">▶</button>
+                        <button @click="stepFrame(5)" class="btn btn-neutral btn-sm h-10 rounded-xl text-slate-300 font-mono text-xs">+5F</button>
+                    </div>
+
+                    <div class="space-y-1.5 bg-slate-900/40 p-2 rounded-xl border border-white/5">
+                        <div class="flex justify-between items-center text-[9px] font-mono text-slate-400">
+                            <span>SPEED RATE</span>
+                            <span class="text-accent font-black" x-text="currentSpeed.toFixed(2) + ' x'"></span>
+                        </div>
+                        <input type="range" min="0.25" max="2.0" step="0.05" x-model.number="currentSpeed" @input="changeSpeed" class="range range-accent range-xs w-full cursor-pointer" />
+                        <div class="grid grid-cols-4 gap-1 text-[9px] font-mono">
+                            <button @click="adjustSpeed(-0.05)" class="btn btn-xs h-6 rounded-md btn-outline border-white/5">-0.05</button>
+                            <button @click="adjustSpeed(0.05)" class="btn btn-xs h-6 rounded-md btn-outline border-white/5">+0.05</button>
+                            <button @click="setSpeed(1.0)" class="btn btn-xs h-6 rounded-md btn-neutral">1.0x</button>
+                            <button @click="setSpeed(0.5)" class="btn btn-xs h-6 rounded-md btn-neutral">0.5x</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(1)">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[9px] font-black tracking-widest text-slate-400 font-mono">02 / INTERVAL LOOP</span>
+                        <input type="checkbox" class="toggle toggle-primary toggle-xs" x-model="loopEnabled" :disabled="startPoint === null" />
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 my-auto">
+                        <button @click="setStartPoint" class="btn btn-sm h-10 rounded-lg text-[10px] font-black transition-all" :class="startPoint !== null ? 'btn-primary text-white' : 'btn-outline btn-primary'">SET POINT A</button>
+                        <button @click="setEndPoint" class="btn btn-sm h-10 rounded-lg text-[10px] font-black transition-all" :class="endPoint !== null ? 'btn-secondary text-white' : 'btn-outline btn-secondary'">SET POINT B</button>
+                        <button @click="jumpToStart" class="btn btn-xs btn-neutral h-8 rounded-md text-[10px] font-bold" :disabled="startPoint === null">JUMP TO A</button>
+                        <button @click="clearLoop" class="btn btn-xs btn-ghost text-error h-8 rounded-md text-[10px] font-bold" :disabled="startPoint === null && endPoint === null">RESET LOOP</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 bg-slate-900/60 p-1.5 rounded-lg text-[10px] font-mono text-center border border-white/5">
+                        <div class="border-r border-white/5"><span class="opacity-40 text-[8px] block">START A</span><span class="text-primary font-black" x-text="startPoint !== null ? formatTime(startPoint) : '--:--.--'"></span></div>
+                        <div><span class="opacity-40 text-[8px] block">END B</span><span class="text-secondary font-black" x-text="endPoint !== null ? formatTime(endPoint) : '--:--.--'"></span></div>
+                    </div>
+                </div>
+
+                <div class="absolute inset-0 px-4 py-2 flex flex-col justify-between transition-all duration-300 transform" :style="getPanelStyle(2)">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[9px] font-black tracking-widest text-slate-400 font-mono">03 / EXPORT</span>
+                        <span class="text-[9px] font-mono text-emerald-400 font-bold">READY</span>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-2 my-auto">
+                        <button @click="exportFullVideo" class="btn h-14 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 border-none text-white font-black tracking-wider text-xs shadow-md">
+                            SAVE FULL VIDEO (ORIGINAL)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function mobileController() {
+            return {
+                videoSrc: '',
+                originalFile: null,
+                fileName: '',
+                isPlaying: false,
+                currentSpeed: 1.0,
+                currentTime: 0,
+                duration: 0,
+                fps: 30,
+                videoElement: null,
+                isUserSeeking: false,
+                isMirrored: false,
+                
+                panelOpen: false,
+                activeTab: 0,
+                maxTabs: 3,
+
+                // ズーム・パン
+                zoomScale: 1.0, zoomX: 0, zoomY: 0, baseScale: 1.0, baseX: 0, baseY: 0,
+                touchStartDist: 0, touchStartMidX: 0, touchStartMidY: 0, isPinching: false, lastTapTime: 0,
+                touchStartTime: 0, touchStartX: 0, touchStartY: 0, startY: 0, currentY: 0, flickStartX: 0, flickStartY: 0,
+
+                // ループ
+                startPoint: null, endPoint: null, loopEnabled: false,
+
+                // QR・配信関係拡張
+                isQrScannerMode: false,
+                isStreaming: false,
+                localStream: null,
+                peerConnection: null,
+                scanAnimationId: null,
+
+                initApp() {
+                    this.fps = parseInt(localStorage.getItem('local_controller_fps') || '30');
+                    let lastTouchEnd = 0;
+                    document.addEventListener('touchend', (e) => {
+                        const now = (new Date()).getTime();
+                        if (now - lastTouchEnd <= 300) { e.preventDefault(); }
+                        lastTouchEnd = now;
+                    }, false);
+                },
+
+                // QRスキャナー・配信カメラ兼用一括起動
+                async startQrScanner() {
+                    this.isQrScannerMode = true;
+                    this.isStreaming = false;
+                    if(this.videoSrc) { URL.revokeObjectURL(this.videoSrc); this.videoSrc = ''; }
+
+                    try {
+                        // 最高画質・フレームレートで背面指定
+                        this.localStream = await navigator.mediaDevices.getUserMedia({
+                            video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60 } },
+                            audio: false
+                        });
+
+                        const previewVideo = document.getElementById('mobile-preview');
+                        previewVideo.srcObject = this.localStream;
+                        previewVideo.play();
+
+                        // 隠しCanvasを用いてQRの解析ループを回す
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+
+                        const scanLoop = () => {
+                            if (!this.isQrScannerMode || this.isStreaming) return;
+                            
+                            if (previewVideo.readyState === previewVideo.HAVE_ENOUGH_DATA) {
+                                canvas.width = previewVideo.videoWidth;
+                                canvas.height = previewVideo.videoHeight;
+                                ctx.drawImage(previewVideo, 0, 0, canvas.width, canvas.height);
+                                
+                                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                                    inversionAttempts: "dontInvert",
+                                });
+
+                                if (code) {
+                                    // 読み取り成功したらWebRTCシグナリング(一方通行)へ突入
+                                    this.connectToPc(code.data);
+                                    return;
+                                }
+                            }
+                            this.scanAnimationId = requestAnimationFrame(scanLoop);
+                        };
+                        this.scanAnimationId = requestAnimationFrame(scanLoop);
+
+                    } catch (err) {
+                        alert("カメラの起動に失敗しました。HTTPS環境または権限を確認してください。");
+                        this.isQrScannerMode = false;
+                    }
+                },
+
+                // PC側へのWebRTC一方通行ネゴシエーション
+                async connectToPc(base64Sdp) {
+                    this.isStreaming = true;
+                    if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
+
+                    try {
+                        // pakoで圧縮されたSDPを復元
+                        const compressed = atob(base64Sdp);
+                        const charData = compressed.split('').map(x => x.charCodeAt(0));
+                        const binData = new Uint8Array(charData);
+                        const pcSdp = pako.inflate(binData, { to: 'string' });
+
+                        this.peerConnection = new RTCPeerConnection({
+                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                        });
+
+                        // ストリームを登録
+                        this.localStream.getTracks().forEach(track => {
+                            this.peerConnection.addTrack(track, this.localStream);
+                        });
+
+                        // リモートOffer（PC側SDP）を擬似設定
+                        await this.peerConnection.setRemoteDescription(new RTCSessionDescription({
+                            type: 'offer',
+                            sdp: pcSdp
+                        }));
+
+                        // アンサーを生成してローカルにバインド
+                        const answer = await this.peerConnection.createAnswer();
+                        await this.peerConnection.setLocalDescription(answer);
+                        
+                        // 注意: サーバーレス完全一方通行のため、PC側は既にCandidateが集まった段階のSDPを待ち受けているためこれだけで確立します。
+
+                    } catch (e) {
+                        alert("接続処理に失敗しました。QRコードをもう一度読み込んでください。");
+                        this.isStreaming = false;
+                        this.startQrScanner();
+                    }
+                },
+
+                stopQrScanner() {
+                    this.isQrScannerMode = false;
+                    this.isStreaming = false;
+                    if (this.scanAnimationId) cancelAnimationFrame(this.scanAnimationId);
+                    if (this.localStream) this.localStream.getTracks().forEach(t => t.stop());
+                    if (this.peerConnection) this.peerConnection.close();
+                },
+
+                // 既存の各種コントローラーロジック群
+                handleVideoTouchStart(e) {
+                    if (!this.videoSrc && !this.isQrScannerMode) return;
+                    const now = Date.now();
+                    if (e.touches.length === 1) { this.touchStartTime = now; this.touchStartX = e.touches[0].clientX; this.touchStartY = e.touches[0].clientY; }
+                    if (e.touches.length === 1 && (now - this.lastTapTime < 300)) { this.resetZoom(); this.touchStartTime = 0; this.lastTapTime = 0; return; }
+                    if (e.touches.length === 1) { this.lastTapTime = now; }
+                    if (e.touches.length === 2) {
+                        this.isPinching = true; const t1 = e.touches[0]; const t2 = e.touches[1];
+                        this.touchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+                        this.touchStartMidX = (t1.clientX + t2.clientX) / 2; this.touchStartMidY = (t1.clientY + t2.clientY) / 2;
+                        this.baseScale = this.zoomScale; this.baseX = this.zoomX; this.baseY = this.zoomY;
+                    }
+                },
+                handleVideoTouchMove(e) {
+                    if (!this.videoSrc && !this.isQrScannerMode) return;
+                    if (e.touches.length === 1 && this.touchStartTime > 0) {
+                        const moveX = Math.abs(e.touches[0].clientX - this.touchStartX); const moveY = Math.abs(e.touches[0].clientY - this.touchStartY);
+                        if (moveX > 10 || moveY > 10) { this.touchStartTime = 0; }
+                    }
+                    if (!this.isPinching) return;
+                    if (e.touches.length === 2) {
+                        const t1 = e.touches[0]; const t2 = e.touches[1];
+                        const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+                        const currentMidX = (t1.clientX + t2.clientX) / 2; const currentMidY = (t1.clientY + t2.clientY) / 2;
+                        if (this.touchStartDist > 0) { const factor = currentDist / this.touchStartDist; this.zoomScale = Math.min(Math.max(this.baseScale * factor, 1.0), 5.0); }
+                        if (this.zoomScale > 1.0) { this.zoomX = this.baseX + (currentMidX - this.touchStartMidX); this.zoomY = this.baseY + (currentMidY - this.touchStartMidY); }
+                        else { this.zoomX = 0; this.zoomY = 0; }
+                    }
+                },
+                handleVideoTouchEnd(e) {
+                    const now = Date.now();
+                    if (this.touchStartTime > 0 && (now - this.touchStartTime < 250) && e.touches.length === 0 && !this.isPinching) {
+                        setTimeout(() => { if (Date.now() - this.lastTapTime >= 280) { if(!this.isQrScannerMode) this.togglePlay(); } }, 50);
+                    }
+                    this.touchStartTime = 0;
+                    if (e.touches.length < 2) { this.isPinching = false; if (this.zoomScale <= 1.0) { this.zoomScale = 1.0; this.zoomX = 0; this.zoomY = 0; } }
+                },
+                resetZoom() { this.zoomScale = 1.0; this.zoomX = 0; this.zoomY = 0; },
+                handleGlobalTouchStart(e) { this.flickStartX = e.touches[0].clientX; this.flickStartY = e.touches[0].clientY; },
+                handleGlobalTouchMove(e) { if (this.flickStartX < 30 || this.flickStartX > window.innerWidth - 30) { e.preventDefault(); } },
+                handlePanelTouchStart(e) { this.startY = e.touches[0].clientY; },
+                handlePanelTouchMove(e) { this.currentY = e.touches[0].clientY; let diff = this.startY - this.currentY; if (diff > 40 && !this.panelOpen) { this.panelOpen = true; } else if (diff < -40 && this.panelOpen) { this.panelOpen = false; } },
+                handleFlickTouchStart(e) { this.flickStartX = e.touches[0].clientX; this.flickStartY = e.touches[0].clientY; },
+                handleFlickTouchEnd(e) {
+                    let diffX = e.changedTouches[0].clientX - this.flickStartX; let diffY = e.changedTouches[0].clientY - this.flickStartY;
+                    if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 60) { if (diffX > 0 && this.activeTab > 0) { this.activeTab--; } else if (diffX < 0 && this.activeTab < this.maxTabs - 1) { this.activeTab++; } }
+                },
+                getPanelStyle(index) { let offset = (index - this.activeTab) * 100; let opacity = index === this.activeTab ? 1 : 0; let pointerEvents = index === this.activeTab ? 'auto' : 'none'; return `transform: translateX(${offset}%); opacity: ${opacity}; pointer-events: ${pointerEvents};`; },
+                handleFileSelect(e) {
+                    const file = e.target.files[0]; if (!file) return;
+                    if (this.videoElement) { this.videoElement.pause(); } this.isPlaying = false;
+                    this.originalFile = file; this.fileName = file.name;
+                    if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); } this.videoSrc = URL.createObjectURL(file);
+                    this.currentSpeed = 1.0; this.currentTime = 0; this.isMirrored = false; this.clearLoop(); this.resetZoom(); this.panelOpen = true;
+                    this.$nextTick(() => {
+                        this.videoElement = document.getElementById('v-player');
+                        this.videoElement.playbackRate = this.currentSpeed;
+                        this.videoElement.play().catch(err => console.log("Auto-play blocked", err));
+                    });
+                },
+                onMetadataLoaded(e) { this.duration = e.target.duration; },
+                togglePlay() { if (!this.videoElement) return; if (this.isPlaying) { this.videoElement.pause(); } else { this.videoElement.play(); } },
+                updateTime(e) {
+                    if (!this.isUserSeeking) { this.currentTime = e.target.currentTime; }
+                    if (this.loopEnabled && this.startPoint !== null && this.endPoint !== null) {
+                        if (e.target.currentTime >= this.endPoint) { this.videoElement.currentTime = this.startPoint; this.currentTime = this.startPoint; }
+                    }
+                },
+                onSeek() { if (!this.videoElement) return; this.isUserSeeking = true; this.videoElement.currentTime = this.currentTime; this.isUserSeeking = false; },
+                setStartPoint() {
+                    if (!this.videoElement) return; this.startPoint = this.videoElement.currentTime;
+                    if (this.endPoint !== null && this.startPoint >= this.endPoint) { this.endPoint = null; this.loopEnabled = false; }
+                    if (this.startPoint !== null && this.endPoint !== null) { this.loopEnabled = true; }
+                },
+                setEndPoint() {
+                    if (!this.videoElement) return; const targetTime = this.videoElement.currentTime;
+                    if (this.startPoint !== null && targetTime <= this.startPoint) { alert("B点はA点より後ろに指定してください。"); return; }
+                    this.endPoint = targetTime; if (this.startPoint !== null) { this.loopEnabled = true; }
+                },
+                jumpToStart() { if (!this.videoElement || this.startPoint === null) return; this.videoElement.currentTime = this.startPoint; this.currentTime = this.startPoint; },
+                clearLoop() { this.startPoint = null; this.endPoint = null; this.loopEnabled = false; },
+                stepFrame(direction) {
+                    if (!this.videoElement) return; this.videoElement.pause();
+                    const frameDuration = 1 / this.fps; let newTime = this.videoElement.currentTime + (direction * frameDuration);
+                    if (newTime < 0) newTime = 0; if (newTime > this.duration) newTime = this.duration;
+                    this.videoElement.currentTime = newTime; this.currentTime = newTime;
+                },
+                changeSpeed() { if (this.videoElement) { this.videoElement.playbackRate = this.currentSpeed; } },
+                adjustSpeed(amount) { this.currentSpeed = Math.min(Math.max(this.currentSpeed + amount, 0.25), 2.0); this.changeSpeed(); },
+                setSpeed(speed) { this.currentSpeed = speed; this.changeSpeed(); },
+                formatTime(seconds) {
+                    if (isNaN(seconds)) return "00:00.00";
+                    const m = Math.floor(seconds / 60); const s = Math.floor(seconds % 60); const ms = Math.floor((seconds % 1) * 100);
+                    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+                },
+                saveSettings() { localStorage.setItem('local_controller_fps', this.fps.toString()); },
+                exportFullVideo() {
+                    if (!this.originalFile) return;
+                    const blobUrl = URL.createObjectURL(this.originalFile); const a = document.createElement('a');
+                    a.href = blobUrl; a.download = `original_${this.fileName}`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(blobUrl);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

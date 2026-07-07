@@ -256,6 +256,7 @@
                 isRecording: false,
                 topicId: '',
                 clientId: '',
+                chunkBuffers: {}, // 分割受信したメッセージを組み立てるための一時保存領域
                 qrCodeUrl: '',
                 peerConnection: null,
                 mediaRecorder: null,
@@ -349,12 +350,67 @@
                         // 自分自身が送信したメッセージは無視する(同じトピックを送受信両方で使っているため)
                         if (data.from === this.clientId) return;
 
-                        // スマホからOfferが届いたら、PC側で受け取ってAnswerを返すように変更
-                        if (data.event === 'offer') {
-                            await this.handleOffer(data.offer);
+                        // スマホからOfferが分割送信されてくるので、全部揃ったら組み立てて処理する
+                        if (data.event === 'offer-chunk') {
+                            const payload = this.receiveChunk(data);
+                            if (payload && payload.offer) {
+                                await this.handleOffer(payload.offer);
+                            }
                         }
                     };
                     // ここで setupPeerConnection() を即時実行するのをやめる（スマホを待つため）
+                },
+
+                // 🧩 大きなデータをntfy.shの1メッセージ上限に収まるサイズへ分割して送信する
+                // (Offer/AnswerのSDPは候補が多いと長くなり、そのまま送ると添付ファイル扱いになってしまうため)
+                sendChunkedMessage(event, payloadObj) {
+                    const json = JSON.stringify(payloadObj);
+                    const chunkSize = 800; // ntfy.shの上限に対して余裕を持たせたサイズ
+                    const totalChunks = Math.ceil(json.length / chunkSize);
+                    const msgId = Math.random().toString(36).substring(2, 10);
+
+                    for (let i = 0; i < totalChunks; i++) {
+                        const chunk = json.slice(i * chunkSize, (i + 1) * chunkSize);
+                        fetch(`https://ntfy.sh/${this.topicId}`, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                event: `${event}-chunk`,
+                                msgId,
+                                index: i,
+                                total: totalChunks,
+                                chunk,
+                                from: this.clientId
+                            })
+                        }).catch(err => console.error('[DEBUG] チャンク送信失敗:', err));
+                    }
+                    console.log(`[DEBUG] ${event}を${totalChunks}個に分割して送信開始 (msgId=${msgId})`);
+                },
+
+                // 🧩 分割で届いたデータをmsgIdごとに集め、全部揃ったら元のオブジェクトに復元する
+                // 揃っていない場合はnullを返す
+                receiveChunk(data) {
+                    const { msgId, index, total, chunk } = data;
+
+                    if (!this.chunkBuffers[msgId]) {
+                        this.chunkBuffers[msgId] = { total, parts: new Array(total) };
+                    }
+                    this.chunkBuffers[msgId].parts[index] = chunk;
+
+                    const buf = this.chunkBuffers[msgId];
+                    const receivedCount = buf.parts.filter(p => p !== undefined).length;
+                    console.log(`[DEBUG] チャンク受信 ${receivedCount}/${buf.total} (msgId=${msgId})`);
+
+                    if (receivedCount < buf.total) return null; // まだ全部揃っていない
+
+                    const fullJson = buf.parts.join('');
+                    delete this.chunkBuffers[msgId];
+
+                    try {
+                        return JSON.parse(fullJson);
+                    } catch (err) {
+                        console.error('[DEBUG] チャンク結合後のJSON.parseに失敗:', err);
+                        return null;
+                    }
                 },
 
                 // スマホから届いたOfferを処理する関数をPC側に追加
@@ -367,14 +423,8 @@
                     // (ntfy.shの送信回数制限にかかるのを防ぐため)
                     this.peerConnection.onicegatheringstatechange = () => {
                         if (this.peerConnection.iceGatheringState === 'complete') {
-                            fetch(`https://ntfy.sh/${this.topicId}`, {
-                                method: 'POST',
-                                body: JSON.stringify({
-                                    event: 'answer',
-                                    answer: this.peerConnection.localDescription,
-                                    from: this.clientId
-                                })
-                            });
+                            // Answerが大きくなりがちなので分割して送信する
+                            this.sendChunkedMessage('answer', { answer: this.peerConnection.localDescription });
                         }
                     };
 

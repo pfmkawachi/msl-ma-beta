@@ -60,7 +60,7 @@
             <video id="v-player" 
                    playsinline 
                    webkit-playsinline
-                   :muted="isConnected"
+                   :muted="isConnected && !videoSrc"
                    :src="videoSrc" 
                    class="w-full h-full object-contain pointer-events-none"
                    :style="`transform: translate(${zoomX}px, ${zoomY}px) scale(${zoomScale}) scaleX(${isMirrored ? -1 : 1});`"
@@ -91,12 +91,14 @@
             <!-- 動的インジケーター[cite: 6] -->
             <div class="absolute top-4 left-4 right-4 flex justify-between items-center z-30 pointer-events-none" x-show="videoSrc || isConnected" x-cloak>
                 <div class="px-3 py-1.5 bg-slate-900/90 backdrop-blur rounded-xl border border-white/5 text-xs font-mono flex items-center gap-2 shadow-lg">
-                    <span class="w-2 h-2 rounded-full" :class="isRecording ? 'bg-error animate-pulse' : (isConnected ? 'bg-info' : (isPlaying ? 'bg-success animate-pulse' : 'bg-warning'))"></span>
-                    <span class="text-white font-bold truncate max-w-[200px]" x-text="isRecording ? 'Rec' : (isConnected ? 'WebCam' : fileName)"></span>
+                    <span class="w-2 h-2 rounded-full" :class="isRecording ? 'bg-error animate-pulse' : ((isConnected && !videoSrc) ? 'bg-info' : (isPlaying ? 'bg-success animate-pulse' : 'bg-warning'))"></span>
+                    <span class="text-white font-bold truncate max-w-[200px]" x-text="isRecording ? 'Rec' : ((isConnected && !videoSrc) ? 'WebCam' : fileName)"></span>
                 </div>
                 
                 <div class="flex gap-2 pointer-events-auto">
-                    <div class="relative">
+                    <!-- 録画由来の解析画面(接続を維持したまま)を見ている場合は「再撮影」ボタンに切り替える -->
+                    <button x-show="isConnected && videoSrc" @click="resumeLiveView" class="btn btn-sm bg-slate-900/90 border-white/10 text-white rounded-lg px-3 font-bold backdrop-blur">再撮影</button>
+                    <div class="relative" x-show="!(isConnected && videoSrc)">
                         <button class="btn btn-sm bg-slate-900/90 border-white/10 text-white rounded-lg px-3 font-bold backdrop-blur">REPLACE VIDEO</button>
                         <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                     </div>
@@ -111,7 +113,7 @@
         <!-- 右パネル全体[cite: 6] -->
         <div class="w-full h-1/3 md:h-full md:w-[380px] shrink-0 glass-panel flex flex-col overflow-y-auto" x-show="videoSrc || isConnected || isTablet" x-cloak>
             
-            <div class="p-4 border-b border-white/5 bg-slate-950/40" x-show="!isConnected">
+            <div class="p-4 border-b border-white/5 bg-slate-950/40" x-show="videoSrc">
                 <div class="flex justify-between items-center font-mono text-xs mb-1">
                     <span class="font-black text-primary text-sm" x-text="formatTime(currentTime)">00:00.00</span>
                     <span class="opacity-40 font-bold" x-text="formatTime(duration)">00:00.00</span>
@@ -128,7 +130,7 @@
 
             <div class="p-4 space-y-5 flex-1">
                 
-                <div class="space-y-5" x-show="!isConnected && videoSrc">
+                <div class="space-y-5" x-show="videoSrc">
                     <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-3">
                         <div class="flex justify-between items-center border-b border-white/5 pb-1.5">
                             <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">01 / CONTROLS</span>
@@ -194,12 +196,12 @@
 
                 <!-- 04 / RECORD & EXPORT パネル[cite: 6] -->
                 <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-4" 
-                     x-show="isConnected || isTablet" x-cloak>
+                     x-show="isConnected || isTablet || videoSrc" x-cloak>
                     <div class="border-b border-white/5 pb-1.5">
                         <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">04 / RECORD & EXPORT</span>
                     </div>
 
-                    <div class="flex justify-center py-2" x-show="isConnected">
+                    <div class="flex justify-center py-2" x-show="isConnected && !videoSrc">
                         <button @click="toggleRecording" class="btn btn-circle btn-lg shadow-lg" :class="isRecording ? 'btn-error animate-pulse' : 'btn-outline btn-error'">
                             <template x-if="!isRecording">
                                 <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
@@ -493,7 +495,7 @@
                             
                             if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
                             
-                            this.isConnected = false;
+                            // 接続は維持したまま解析画面へ切り替える(isConnectedはfalseにしない)
                             if (this.videoElement) this.videoElement.srcObject = null;
                             this.videoSrc = URL.createObjectURL(recordedBlob);
                             this.fileName = `Recorded_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
@@ -503,11 +505,6 @@
                             this.isMirrored = false;
                             this.clearLoop();
                             this.resetZoom();
-                            
-                            if (this.eventSource) {
-                                this.eventSource.close();
-                                this.eventSource = null;
-                            }
                             
                             this.$nextTick(() => {
                                 this.videoElement = document.getElementById('v-player');
@@ -521,6 +518,22 @@
                         this.mediaRecorder.stop();
                         this.isRecording = false;
                     }
+                },
+
+                // 🔁「再撮影」ボタン：維持していたライブ映像に解析画面から戻る
+                resumeLiveView() {
+                    if (!this.liveStream) return; // 念のためのガード(通常は接続維持中のみボタン自体が表示される)
+
+                    if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
+                    this.videoSrc = '';
+                    this.originalFile = null;
+                    this.fileName = '';
+
+                    this.$nextTick(() => {
+                        this.videoElement = document.getElementById('v-player');
+                        this.videoElement.srcObject = this.liveStream;
+                        this.videoElement.play().catch(err => console.log(err));
+                    });
                 },
 
                 handleKeyDown(e) {

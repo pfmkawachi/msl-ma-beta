@@ -110,10 +110,22 @@
             <div class="absolute bottom-4 left-4 pointer-events-none text-[10px] font-mono opacity-40 bg-black/40 px-2 py-1 rounded" x-show="videoSrc && zoomScale > 1" x-cloak>
                 Zoom: <span x-text="zoomScale.toFixed(1)"></span>x (Drag to Pan / Double Click to Reset)
             </div>
+
+            <!-- 🔴 録画ボタン(ライブ視聴中のみ、映像エリア下部中央にオーバーレイ配置) -->
+            <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-auto" x-show="isConnected && !videoSrc" x-cloak>
+                <button @click="toggleRecording" class="btn btn-circle btn-lg shadow-lg" :class="isRecording ? 'btn-error animate-pulse' : 'btn-outline btn-error'">
+                    <template x-if="!isRecording">
+                        <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
+                    </template>
+                    <template x-if="isRecording">
+                        <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+                    </template>
+                </button>
+            </div>
         </div>
 
         <!-- 右パネル全体[cite: 6] -->
-        <div class="w-full h-1/3 md:h-full md:w-[380px] shrink-0 glass-panel flex flex-col overflow-y-auto" x-show="videoSrc || isConnected || isTablet" x-cloak>
+        <div class="w-full h-1/3 md:h-full md:w-[380px] shrink-0 glass-panel flex flex-col overflow-y-auto" x-show="videoSrc" x-cloak>
             
             <div class="p-4 border-b border-white/5 bg-slate-950/40" x-show="videoSrc">
                 <div class="flex justify-between items-center font-mono text-xs mb-1">
@@ -196,18 +208,6 @@
                     </div>
                 </div>
 
-                <!-- 録画ボタン(ライブ視聴中のみ、パネルの外に単独で配置) -->
-                <div class="flex justify-center py-2" x-show="isConnected && !videoSrc">
-                    <button @click="toggleRecording" class="btn btn-circle btn-lg shadow-lg" :class="isRecording ? 'btn-error animate-pulse' : 'btn-outline btn-error'">
-                        <template x-if="!isRecording">
-                            <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
-                        </template>
-                        <template x-if="isRecording">
-                            <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
-                        </template>
-                    </button>
-                </div>
-
                 <!-- 04 / RECORD & EXPORT パネル(解析用の動画があるときのみ表示) -->
                 <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-4" 
                      x-show="videoSrc" x-cloak>
@@ -215,8 +215,16 @@
                         <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">04 / RECORD & EXPORT</span>
                     </div>
 
-                    <div x-show="isConnected || (isTablet && videoSrc)">
-                        <button @click="exportFullVideo" class="btn w-full h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 border-none text-white font-black tracking-wider text-xs shadow-md" :disabled="!videoSrc && !originalFile">
+                    <div class="flex gap-2">
+                        <!-- 未接続時のみ表示。SAVEボタンも同時に出る(タブレット)場合は半分幅、単独なら全幅 -->
+                        <button x-show="!isConnected" @click="startWebRTCSetup"
+                                :class="isTablet ? 'w-1/2' : 'w-full'"
+                                class="btn h-12 rounded-xl btn-outline btn-accent font-black tracking-wider text-xs">
+                            スマホと接続
+                        </button>
+                        <button x-show="isConnected || (isTablet && videoSrc)" @click="exportFullVideo"
+                                :class="(!isConnected && isTablet) ? 'w-1/2' : 'w-full'"
+                                class="btn h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 border-none text-white font-black tracking-wider text-xs shadow-md" :disabled="!videoSrc && !originalFile">
                             SAVE FULL VIDEO (ORIGINAL)
                         </button>
                     </div>
@@ -441,6 +449,9 @@
                         // (これまでここが未設定のままだったため、映像が表示されなかった)
                         this.videoElement = document.getElementById('v-player');
                         this.videoElement.srcObject = this.liveStream;
+                        // ハウリング防止：mutedは属性ではなくJSプロパティとして直接指定しないと、
+                        // 再生中の音声に反映されないため明示的に設定する
+                        this.videoElement.muted = true;
                         this.videoElement.play().catch(err => console.log(err));
                     };
 
@@ -512,6 +523,7 @@
                             
                             this.$nextTick(() => {
                                 this.videoElement = document.getElementById('v-player');
+                                this.videoElement.muted = false; // 解析画面では録画した音声を聞けるようミュート解除
                                 this.videoElement.playbackRate = this.currentSpeed;
                                 this.videoElement.play().catch(err => console.log(err));
                             });
@@ -536,6 +548,7 @@
                     this.$nextTick(() => {
                         this.videoElement = document.getElementById('v-player');
                         this.videoElement.srcObject = this.liveStream;
+                        this.videoElement.muted = true; // ライブ視聴に戻るのでハウリング防止のため再度ミュート
                         this.videoElement.play().catch(err => console.log(err));
                     });
                 },

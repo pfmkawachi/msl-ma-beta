@@ -432,6 +432,9 @@
                         this.isConnected = true;
                         this.closeQRModal();
                         this.liveStream = e.streams[0];
+                        // ライブ映像を流し込む先の<video>要素をここで確実に取得する
+                        // (これまでここが未設定のままだったため、映像が表示されなかった)
+                        this.videoElement = document.getElementById('v-player');
                         this.videoElement.srcObject = this.liveStream;
                         this.videoElement.play().catch(err => console.log(err));
                     };

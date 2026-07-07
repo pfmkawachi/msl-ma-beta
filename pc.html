@@ -98,7 +98,9 @@
                 <div class="flex gap-2 pointer-events-auto">
                     <!-- 録画由来の解析画面(接続を維持したまま)を見ている場合は「再撮影」ボタンに切り替える -->
                     <button x-show="isConnected && videoSrc" @click="resumeLiveView" class="btn btn-sm bg-slate-900/90 border-white/10 text-white rounded-lg px-3 font-bold backdrop-blur">再撮影</button>
-                    <div class="relative" x-show="!(isConnected && videoSrc)">
+                    <!-- ライブ視聴中(録画画面)はSP版と同様の接続解除ボタンにする -->
+                    <button x-show="isConnected && !videoSrc" @click="disconnectFromPhone" class="btn btn-xs btn-error btn-outline rounded-lg px-3 h-8 text-[11px] font-bold shadow-lg shadow-error/10">接続を解除する</button>
+                    <div class="relative" x-show="!isConnected">
                         <button class="btn btn-sm bg-slate-900/90 border-white/10 text-white rounded-lg px-3 font-bold backdrop-blur">REPLACE VIDEO</button>
                         <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                     </div>
@@ -194,22 +196,23 @@
                     </div>
                 </div>
 
-                <!-- 04 / RECORD & EXPORT パネル[cite: 6] -->
+                <!-- 録画ボタン(ライブ視聴中のみ、パネルの外に単独で配置) -->
+                <div class="flex justify-center py-2" x-show="isConnected && !videoSrc">
+                    <button @click="toggleRecording" class="btn btn-circle btn-lg shadow-lg" :class="isRecording ? 'btn-error animate-pulse' : 'btn-outline btn-error'">
+                        <template x-if="!isRecording">
+                            <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
+                        </template>
+                        <template x-if="isRecording">
+                            <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+                        </template>
+                    </button>
+                </div>
+
+                <!-- 04 / RECORD & EXPORT パネル(解析用の動画があるときのみ表示) -->
                 <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-4" 
-                     x-show="isConnected || isTablet || videoSrc" x-cloak>
+                     x-show="videoSrc" x-cloak>
                     <div class="border-b border-white/5 pb-1.5">
                         <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">04 / RECORD & EXPORT</span>
-                    </div>
-
-                    <div class="flex justify-center py-2" x-show="isConnected && !videoSrc">
-                        <button @click="toggleRecording" class="btn btn-circle btn-lg shadow-lg" :class="isRecording ? 'btn-error animate-pulse' : 'btn-outline btn-error'">
-                            <template x-if="!isRecording">
-                                <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
-                            </template>
-                            <template x-if="isRecording">
-                                <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
-                            </template>
-                        </button>
                     </div>
 
                     <div x-show="isConnected || (isTablet && videoSrc)">
@@ -443,10 +446,11 @@
 
                     // 🔌 接続が切れたことを検知したら、自動で後片付け(録画中なら確定→解析画面、そうでなければ初期画面)を行う
                     this.peerConnection.oniceconnectionstatechange = () => {
+                        if (!this.peerConnection) return; // 手動切断などで既に後片付け済みの場合は何もしない
                         const state = this.peerConnection.iceConnectionState;
                         console.log('[DEBUG] iceConnectionState変化:', state);
                         if (['disconnected', 'failed', 'closed'].includes(state)) {
-                            this.handleConnectionLost();
+                            this.disconnectFromPhone();
                         }
                     };
 
@@ -457,13 +461,13 @@
                     await this.peerConnection.setLocalDescription(answer);
                 },
 
-                // 🔌 スマホとの接続が切れたときの後片付け
+                // 🔌 スマホとの接続を切る処理。「接続を解除する」ボタン(手動)と、切断の自動検知の両方から呼ばれる
                 // 録画中だった場合は録画を確定させて解析画面へ引き継ぎ、そうでなければ初期画面に戻す
-                handleConnectionLost() {
+                disconnectFromPhone() {
                     if (!this.peerConnection) return; // 二重実行防止(後片付け済み)
 
                     if (this.isRecording) {
-                        this.toggleRecording(); // mediaRecorder.stop()相当。onstop内でisConnected=falseと解析画面への遷移が行われる
+                        this.toggleRecording(); // mediaRecorder.stop()相当。onstop内で解析画面への遷移が行われる
                     } else {
                         this.isConnected = false;
                         if (this.videoElement) this.videoElement.srcObject = null;

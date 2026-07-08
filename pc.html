@@ -216,14 +216,14 @@
                     </div>
 
                     <div class="flex gap-2">
-                        <!-- 未接続時のみ表示。SAVEボタンも同時に出る(タブレット)場合は半分幅、単独なら全幅 -->
+                        <!-- 未接続時のみ表示。SAVEボタンは常に表示されるため、出るときは常に半分幅 -->
                         <button x-show="!isConnected" @click="startWebRTCSetup"
-                                :class="isTablet ? 'w-1/2' : 'w-full'"
-                                class="btn h-12 rounded-xl btn-outline btn-accent font-black tracking-wider text-xs">
+                                class="btn h-12 rounded-xl btn-outline btn-accent font-black tracking-wider text-xs w-1/2">
                             スマホと接続
                         </button>
-                        <button x-show="isConnected || (isTablet && videoSrc)" @click="exportFullVideo"
-                                :class="(!isConnected && isTablet) ? 'w-1/2' : 'w-full'"
+                        <!-- 動画があれば接続状況に関わらず常に表示(切断されても保存できなくならないように) -->
+                        <button @click="exportFullVideo"
+                                :class="isConnected ? 'w-full' : 'w-1/2'"
                                 class="btn h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 border-none text-white font-black tracking-wider text-xs shadow-md" :disabled="!videoSrc && !originalFile">
                             SAVE VIDEO
                         </button>
@@ -453,14 +453,18 @@
                         this.fileName = '';
 
                         this.liveStream = e.streams[0];
-                        // ライブ映像を流し込む先の<video>要素をここで確実に取得する
-                        // (これまでここが未設定のままだったため、映像が表示されなかった)
-                        this.videoElement = document.getElementById('v-player');
-                        this.videoElement.srcObject = this.liveStream;
-                        // ハウリング防止：mutedは属性ではなくJSプロパティとして直接指定しないと、
-                        // 再生中の音声に反映されないため明示的に設定する
-                        this.videoElement.muted = true;
-                        this.videoElement.play().catch(err => console.log(err));
+
+                        // Alpineがvideoタグのsrc属性の後片付けを終えるのを待ってから、
+                        // ライブ映像をセットする(同時に行うと映像がフリーズすることがあるため)
+                        this.$nextTick(() => {
+                            this.videoElement = document.getElementById('v-player');
+                            this.videoElement.removeAttribute('src'); // 念のため古いsrc属性を明示的に除去
+                            this.videoElement.srcObject = this.liveStream;
+                            // ハウリング防止：mutedは属性ではなくJSプロパティとして直接指定しないと、
+                            // 再生中の音声に反映されないため明示的に設定する
+                            this.videoElement.muted = true;
+                            this.videoElement.play().catch(err => console.log(err));
+                        });
                     };
 
                     // 🔌 接続が切れたことを検知したら、自動で後片付け(録画中なら確定→解析画面、そうでなければ初期画面)を行う
@@ -561,6 +565,7 @@
 
                     this.$nextTick(() => {
                         this.videoElement = document.getElementById('v-player');
+                        this.videoElement.removeAttribute('src'); // 念のため古いsrc属性を明示的に除去
                         this.videoElement.srcObject = this.liveStream;
                         this.videoElement.muted = true; // ライブ視聴に戻るのでハウリング防止のため再度ミュート
                         this.videoElement.play().catch(err => console.log(err));

@@ -274,8 +274,7 @@
                 peerConnection: null,
                 mediaRecorder: null,
                 recordedChunks: [],
-                recordingCanvas: null,        // 録画専用の描き写し先キャンバス
-                recordingAnimationId: null,   // 描画ループのrequestAnimationFrame ID
+                recordingStream: null, // 録画専用に複製したストリーム(あらかじめ準備しておくためのもの)
                 liveStream: null,
                 eventSource: null,
 
@@ -456,6 +455,10 @@
 
                         this.liveStream = e.streams[0];
 
+                        // 録画ボタンを押した"その瞬間"に複製・準備すると表示がフリーズしやすいため、
+                        // 接続直後(録画するかまだ分からない段階)で先に録画係を準備しておく
+                        this.prepareRecorder();
+
                         // Alpineがvideoタグのsrc属性の後片付けを終えるのを待ってから、
                         // ライブ映像をセットする(同時に行うと映像がフリーズすることがあるため)
                         this.$nextTick(() => {
@@ -509,66 +512,64 @@
                         this.liveStream.getTracks().forEach(track => track.stop());
                         this.liveStream = null;
                     }
+
+                    // 録画中でなければ、準備だけして未使用だった録画係の複製トラックも解放する
+                    if (this.recordingStream) {
+                        this.recordingStream.getTracks().forEach(track => track.stop());
+                        this.recordingStream = null;
+                    }
+                    this.mediaRecorder = null;
+                },
+
+                // 🎥 録画係(MediaRecorder)をあらかじめ準備しておく
+                // 「録画ボタンを押したその瞬間」に準備すると表示がフリーズしやすいため、
+                // 接続直後(まだ録画するかどうか分からない段階)で呼び出しておく
+                prepareRecorder() {
+                    if (!this.liveStream) return;
+
+                    // 画面表示中のliveStreamをそのまま録画に使うと、表示と録画がトラックを取り合って
+                    // プレビューが固まることがあるため、録画専用に複製(clone)したトラックを渡す
+                    this.recordingStream = new MediaStream(this.liveStream.getTracks().map(track => track.clone()));
+                    this.mediaRecorder = new MediaRecorder(this.recordingStream, { mimeType: 'video/webm;codecs=vp8,opus' });
+                    this.mediaRecorder.ondataavailable = (e) => {
+                        if (e.data.size > 0) this.recordedChunks.push(e.data);
+                    };
+                    this.mediaRecorder.onstop = () => {
+                        // 録画専用に複製したトラックはもう不要なので解放する(表示用のliveStreamはそのまま維持)
+                        this.recordingStream.getTracks().forEach(track => track.stop());
+                        this.recordingStream = null;
+
+                        const recordedBlob = new Blob(this.recordedChunks, { type: 'video/webm' });
+                        this.originalFile = recordedBlob;
+                        
+                        if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
+                        
+                        // 接続は維持したまま解析画面へ切り替える(isConnectedはfalseにしない)
+                        if (this.videoElement) this.videoElement.srcObject = null;
+                        this.videoSrc = URL.createObjectURL(recordedBlob);
+                        this.fileName = `Recorded_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+                        
+                        this.currentSpeed = 1.0;
+                        this.currentTime = 0;
+                        this.isMirrored = false;
+                        this.clearLoop();
+                        this.resetZoom();
+                        
+                        this.$nextTick(() => {
+                            this.videoElement = document.getElementById('v-player');
+                            this.videoElement.muted = false; // 解析画面では録画した音声を聞けるようミュート解除
+                            this.videoElement.playbackRate = this.currentSpeed;
+                            this.videoElement.play().catch(err => console.log(err));
+                        });
+                    };
                 },
 
                 toggleRecording() {
                     if (!this.isRecording) {
                         this.recordedChunks = [];
-
-                        // 🎨 画面表示(video要素)と録画処理を完全に分離するため、
-                        // 今映っている映像を見えないキャンバスに毎フレーム描き写し、
-                        // そのキャンバスの映像を録画する(video要素側には一切触れない)
-                        const canvas = document.createElement('canvas');
-                        canvas.width = this.videoElement.videoWidth || 1280;
-                        canvas.height = this.videoElement.videoHeight || 720;
-                        const ctx = canvas.getContext('2d');
-                        this.recordingCanvas = canvas;
-
-                        const drawFrame = () => {
-                            ctx.drawImage(this.videoElement, 0, 0, canvas.width, canvas.height);
-                            this.recordingAnimationId = requestAnimationFrame(drawFrame);
-                        };
-                        drawFrame();
-
-                        // キャンバスには音声が無いため、音声だけliveStreamから複製して合成する
-                        const canvasStream = canvas.captureStream(30);
-                        const audioTracks = this.liveStream.getAudioTracks().map(track => track.clone());
-                        const recordingStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
-
-                        this.mediaRecorder = new MediaRecorder(recordingStream, { mimeType: 'video/webm;codecs=vp8,opus' });
-                        this.mediaRecorder.ondataavailable = (e) => {
-                            if (e.data.size > 0) this.recordedChunks.push(e.data);
-                        };
-                        this.mediaRecorder.onstop = () => {
-                            // 描画ループと、複製した音声トラックを停止する(表示用のliveStreamはそのまま維持)
-                            cancelAnimationFrame(this.recordingAnimationId);
-                            this.recordingAnimationId = null;
-                            this.recordingCanvas = null;
-                            audioTracks.forEach(track => track.stop());
-
-                            const recordedBlob = new Blob(this.recordedChunks, { type: 'video/webm' });
-                            this.originalFile = recordedBlob;
-                            
-                            if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
-                            
-                            // 接続は維持したまま解析画面へ切り替える(isConnectedはfalseにしない)
-                            if (this.videoElement) this.videoElement.srcObject = null;
-                            this.videoSrc = URL.createObjectURL(recordedBlob);
-                            this.fileName = `Recorded_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
-                            
-                            this.currentSpeed = 1.0;
-                            this.currentTime = 0;
-                            this.isMirrored = false;
-                            this.clearLoop();
-                            this.resetZoom();
-                            
-                            this.$nextTick(() => {
-                                this.videoElement = document.getElementById('v-player');
-                                this.videoElement.muted = false; // 解析画面では録画した音声を聞けるようミュート解除
-                                this.videoElement.playbackRate = this.currentSpeed;
-                                this.videoElement.play().catch(err => console.log(err));
-                            });
-                        };
+                        // 通常は接続直後にprepareRecorder()で準備済みのはずだが、
+                        // 念のため未準備の場合はここで用意する
+                        if (!this.mediaRecorder) this.prepareRecorder();
                         this.mediaRecorder.start();
                         this.isRecording = true;
                     } else {
@@ -585,6 +586,9 @@
                     this.videoSrc = '';
                     this.originalFile = null;
                     this.fileName = '';
+
+                    // 前回使った録画係は停止済みで再利用できないため、次の録画に備えて準備し直す
+                    this.prepareRecorder();
 
                     this.$nextTick(() => {
                         this.videoElement = document.getElementById('v-player');

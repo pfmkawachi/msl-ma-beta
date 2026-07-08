@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark" class="w-full h-full overflow-hidden select-none">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#020617">
+    <title>Motion Analyzer</title>
+    <link rel="icon" type="image/png" href="./img/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="./img/favicon.svg" />
+    <link rel="shortcut icon" href="./img/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./img/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="M-Analyzer" />
+    <link rel="manifest" href="./site.webmanifest" />
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        
+        html, body {
+            position: fixed;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+            overscroll-behavior: none;
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-left: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        #v-player {
+            will-change: transform;
+            transition: transform 0.05s linear;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased p-0 m-0 w-full h-full font-sans"
+      x-data="desktopController()"
+      x-init="initApp()"
+      @keydown.window="handleKeyDown($event)">
+
+    <div class="w-full h-full flex flex-col md:flex-row relative overflow-hidden">
+        
+        <div class="flex-1 h-2/3 md:h-full bg-black flex items-center justify-center relative overflow-hidden"
+             @touchstart="handleVideoTouchStart($event)"
+             @touchmove="handleVideoTouchMove($event)"
+             @touchend="handleVideoTouchEnd($event)"
+             @mousedown="handleVideoMouseDown($event)"
+             @mousemove="handleVideoMouseMove($event)"
+             @mouseup="handleVideoMouseUp($event)"
+             @mouseleave="handleVideoMouseLeave($event)"
+             @wheel="handleVideoWheel($event)"
+             @dblclick="resetZoom()">
+            
+            <video id="v-player" 
+                   playsinline 
+                   webkit-playsinline
+                   :muted="isConnected && !videoSrc"
+                   :src="videoSrc" 
+                   class="w-full h-full object-contain pointer-events-none"
+                   :style="`transform: translate(${zoomX}px, ${zoomY}px) scale(${zoomScale}) scaleX(${isMirrored ? -1 : 1});`"
+                   @timeupdate="updateTime" 
+                   @play="isPlaying = true" 
+                   @pause="isPlaying = false" 
+                   @loadedmetadata="onMetadataLoaded">
+            </video>
+
+            <!-- 初期表示画面[cite: 6] -->
+            <div class="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-gradient-to-b from-slate-900/60 to-slate-950/90 pointer-events-auto" x-show="!videoSrc && !isConnected">
+                <div class="w-16 h-16 bg-gradient-to-tr from-primary to-accent rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20 mb-4">
+                    <img src="./img/icon.svg" width="64">
+                </div>
+                <p class="text-[10px] font-mono mb-0">Modular Spin Lab</p>
+                <h2 class="text-xl font-black tracking-widest text-white mt-2 mb-2"><img src="./img/logo.svg" alt="MOTION ANALYZER" width="320"></h2>
+                <p class="text-[10px] opacity-40 font-mono mb-6">beta v1.1 - 20260707</p>
+                
+                <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
+                    <div class="relative">
+                        <button class="btn btn-primary rounded-xl px-8 font-bold shadow-lg shadow-primary/30">CHOOSE VIDEO</button>
+                        <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    </div>
+                    <button @click="startWebRTCSetup" class="btn btn-outline btn-accent rounded-xl px-8 font-bold">スマホと接続</button>
+                </div>
+            </div>
+
+            <!-- 動的インジケーター[cite: 6] -->
+            <div class="absolute top-4 left-4 right-4 flex justify-between items-center z-30 pointer-events-none" x-show="videoSrc || isConnected" x-cloak>
+                <div class="px-3 py-1.5 bg-slate-900/90 backdrop-blur rounded-xl border border-white/5 text-xs font-mono flex items-center gap-2 shadow-lg">
+                    <span class="w-2 h-2 rounded-full" :class="isRecording ? 'bg-error animate-pulse' : ((isConnected && !videoSrc) ? 'bg-info' : (isPlaying ? 'bg-success animate-pulse' : 'bg-warning'))"></span>
+                    <span class="text-white font-bold truncate max-w-[200px]" x-text="isRecording ? 'Rec' : ((isConnected && !videoSrc) ? 'WebCam' : fileName)"></span>
+                </div>
+                
+                <div class="flex gap-2 pointer-events-auto">
+                    <!-- 録画由来の解析画面(接続を維持したまま)を見ている場合は「再撮影」ボタンに切り替える -->
+                    <button x-show="isConnected && videoSrc" @click="resumeLiveView" class="btn btn-sm bg-slate-900/90 border-white/10 text-white rounded-lg px-3 font-bold backdrop-blur">再撮影</button>
+                    <!-- ライブ視聴中(録画画面)はSP版と同様の接続解除ボタンにする -->
+                    <button x-show="isConnected && !videoSrc" @click="disconnectFromPhone" class="btn btn-xs btn-error btn-outline rounded-lg px-3 h-8 text-[11px] font-bold shadow-lg shadow-error/10">接続を解除する</button>
+                    <div class="relative" x-show="!isConnected">
+                        <button class="btn btn-sm bg-slate-900/90 border-white/10 text-white rounded-lg px-3 font-bold backdrop-blur">REPLACE VIDEO</button>
+                        <input type="file" accept="video/*" @change="handleFileSelect" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="absolute bottom-4 left-4 pointer-events-none text-[10px] font-mono opacity-40 bg-black/40 px-2 py-1 rounded" x-show="videoSrc && zoomScale > 1" x-cloak>
+                Zoom: <span x-text="zoomScale.toFixed(1)"></span>x (Drag to Pan / Double Click to Reset)
+            </div>
+
+            <!-- 🔴 録画ボタン(ライブ視聴中のみ、映像エリア下部中央にオーバーレイ配置) -->
+            <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-auto" x-show="isConnected && !videoSrc" x-cloak>
+                <button @click="toggleRecording" class="btn btn-circle btn-lg shadow-lg" :class="isRecording ? 'btn-error animate-pulse' : 'btn-outline btn-error'">
+                    <template x-if="!isRecording">
+                        <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>
+                    </template>
+                    <template x-if="isRecording">
+                        <svg class="w-6 h-6 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+                    </template>
+                </button>
+            </div>
+        </div>
+
+        <!-- 右パネル全体[cite: 6] -->
+        <div class="w-full h-1/3 md:h-full md:w-[380px] shrink-0 glass-panel flex flex-col overflow-y-auto" x-show="videoSrc" x-cloak>
+            
+            <div class="p-4 border-b border-white/5 bg-slate-950/40" x-show="videoSrc">
+                <div class="flex justify-between items-center font-mono text-xs mb-1">
+                    <span class="font-black text-primary text-sm" x-text="formatTime(currentTime)">00:00.00</span>
+                    <span class="opacity-40 font-bold" x-text="formatTime(duration)">00:00.00</span>
+                </div>
+                <input type="range" min="0" :max="duration" step="0.01" x-model="currentTime" @input="onSeek" class="range range-primary range-sm w-full cursor-pointer" />
+                
+                <div class="flex justify-center mt-3">
+                    <button @click="togglePlay" class="btn btn-primary btn-circle shadow-lg shadow-primary/20">
+                        <template x-if="!isPlaying"><svg class="w-5 h-5 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></template>
+                        <template x-if="isPlaying"><svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></template>
+                    </button>
+                </div>
+            </div>
+
+            <div class="p-4 space-y-5 flex-1">
+                
+                <div class="space-y-5" x-show="videoSrc">
+                    <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-3">
+                        <div class="flex justify-between items-center border-b border-white/5 pb-1.5">
+                            <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">01 / CONTROLS</span>
+                            <div class="flex items-center gap-2">
+                                <div class="flex items-center gap-1.5 bg-slate-950 px-2 py-1 rounded-lg border border-white/5">
+                                    <span class="text-[9px] font-mono font-bold text-slate-400">MIRROR</span>
+                                    <input type="checkbox" class="toggle toggle-accent toggle-xs" x-model="isMirrored" />
+                                </div>
+                                <div class="badge badge-outline border-white/10 px-2 py-2.5 bg-slate-955 font-mono text-xs font-bold text-secondary">
+                                    <select class="bg-transparent border-none outline-none cursor-pointer" x-model.number="fps" @change="saveSettings">
+                                        <option value="24">24 FPS</option>
+                                        <option value="30">30 FPS</option>
+                                        <option value="60">60 FPS</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-4 gap-2">
+                            <button @click="stepFrame(-5)" class="btn btn-neutral btn-sm rounded-xl text-slate-300 font-mono text-xs">-5F</button>
+                            <button @click="stepFrame(-1)" class="btn btn-outline btn-secondary btn-sm rounded-xl text-xs">◀</button>
+                            <button @click="stepFrame(1)" class="btn btn-outline btn-secondary btn-sm rounded-xl text-xs">▶</button>
+                            <button @click="stepFrame(5)" class="btn btn-neutral btn-sm rounded-xl text-slate-300 font-mono text-xs">+5F</button>
+                        </div>
+                        <p class="text-[9px] text-center opacity-30 font-mono">PC: Arrow keys (◀/▶) to step, Shift to skip 5F</p>
+                    </div>
+
+                    <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-2">
+                        <div class="flex justify-between items-center text-[10px] font-mono text-slate-400 border-b border-white/5 pb-1.5">
+                            <span class="font-black tracking-widest">02 / SPEED RATE</span>
+                            <span class="text-accent font-black text-xs" x-text="currentSpeed.toFixed(2) + ' x'"></span>
+                        </div>
+                        <input type="range" min="0.25" max="2.0" step="0.05" x-model.number="currentSpeed" @input="changeSpeed" class="range range-accent range-xs w-full cursor-pointer" />
+                        <div class="grid grid-cols-4 gap-1.5 text-[10px] font-mono">
+                            <button @click="adjustSpeed(-0.05)" class="btn btn-xs h-7 rounded-lg btn-outline border-white/5">-0.05</button>
+                            <button @click="adjustSpeed(0.05)" class="btn btn-xs h-7 rounded-lg btn-outline border-white/5">+0.05</button>
+                            <button @click="setSpeed(1.0)" class="btn btn-xs h-7 rounded-lg btn-neutral">1.0x</button>
+                            <button @click="setSpeed(0.5)" class="btn btn-xs h-7 rounded-lg btn-neutral">0.5x</button>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-3">
+                        <div class="flex justify-between items-center border-b border-white/5 pb-1.5">
+                            <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">03 / INTERVAL LOOP</span>
+                            <input type="checkbox" class="toggle toggle-primary toggle-xs" x-model="loopEnabled" :disabled="startPoint === null" />
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <button @click="setStartPoint" class="btn btn-sm h-10 rounded-xl text-[11px] font-black transition-all" :class="startPoint !== null ? 'btn-primary text-white' : 'btn-outline btn-primary'">SET POINT A</button>
+                            <button @click="setEndPoint" class="btn btn-sm h-10 rounded-xl text-[11px] font-black transition-all" :class="endPoint !== null ? 'btn-secondary text-white' : 'btn-outline btn-secondary'">SET POINT B</button>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button @click="jumpToStart" class="btn btn-xs btn-neutral h-8 rounded-lg text-[10px] font-bold" :disabled="startPoint === null">JUMP TO A</button>
+                            <button @click="clearLoop" class="btn btn-xs btn-ghost text-error h-8 rounded-lg text-[10px] font-bold" :disabled="startPoint === null && endPoint === null">RESET LOOP</button>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2 bg-slate-950 p-2 rounded-xl text-xs font-mono text-center border border-white/5">
+                            <div class="border-r border-white/5"><span class="opacity-40 text-[9px] block">START A</span><span class="text-primary font-black text-sm" x-text="startPoint !== null ? formatTime(startPoint) : '--:--.--'"></span></div>
+                            <div><span class="opacity-40 text-[9px] block">END B</span><span class="text-secondary font-black text-sm" x-text="endPoint !== null ? formatTime(endPoint) : '--:--.--'"></span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 04 / RECORD & EXPORT パネル(解析用の動画があるときのみ表示) -->
+                <div class="bg-slate-900/40 p-3 rounded-xl border border-white/5 space-y-4" 
+                     x-show="videoSrc" x-cloak>
+                    <div class="border-b border-white/5 pb-1.5">
+                        <span class="text-[10px] font-black tracking-widest text-slate-400 font-mono">04 / RECORD & EXPORT</span>
+                    </div>
+
+                    <div class="flex gap-2">
+                        <!-- 未接続時のみ表示。SAVEボタンは常に表示されるため、出るときは常に半分幅 -->
+                        <button x-show="!isConnected" @click="startWebRTCSetup"
+                                class="btn h-12 rounded-xl btn-outline btn-accent font-black tracking-wider text-xs w-1/2">
+                            スマホと接続
+                        </button>
+                        <!-- 動画があれば接続状況に関わらず常に表示(切断されても保存できなくならないように) -->
+                        <button @click="exportFullVideo"
+                                :class="isConnected ? 'w-full' : 'w-1/2'"
+                                class="btn h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 border-none text-white font-black tracking-wider text-xs shadow-md" :disabled="!videoSrc && !originalFile">
+                            SAVE VIDEO
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+
+    <!-- スマホ接続用QRコード表示モーダル[cite: 6] -->
+    <dialog id="qr_modal" class="modal">
+        <div class="modal-box bg-slate-900 border border-white/10 text-center max-w-sm">
+            <h3 class="font-black text-lg text-white mb-4">スマホと連携</h3>
+            <div class="bg-white p-4 rounded-xl inline-block mb-4">
+                <img :src="qrCodeUrl" alt="QR Code" class="w-48 h-48">
+            </div>
+            <p class="text-xs text-slate-400 font-mono mb-4">同じLAN環境のスマホで読み取ってください</p>
+            <div class="modal-action justify-center">
+                <button class="btn btn-sm btn-neutral rounded-lg" @click="closeQRModal">閉じる</button>
+            </div>
+        </div>
+    </dialog>
+
+    <script>
+        function desktopController() {
+            return {
+                videoSrc: '',
+                originalFile: null,
+                fileName: '',
+                isPlaying: false,
+                currentSpeed: 1.0,
+                currentTime: 0,
+                duration: 0,
+                fps: 30,
+                videoElement: null,
+                isUserSeeking: false,
+                isMirrored: false,
+                isTablet: false,
+
+                isConnected: false,
+                isRecording: false,
+                topicId: '',
+                clientId: '',
+                chunkBuffers: {}, // 分割受信したメッセージを組み立てるための一時保存領域
+                qrCodeUrl: '',
+                peerConnection: null,
+                mediaRecorder: null,
+                recordedChunks: [],
+                recordingCanvas: null,        // 録画専用の描き写し先キャンバス
+                recordingAnimationId: null,   // 描画ループのrequestAnimationFrame ID
+                liveStream: null,
+                eventSource: null,
+
+                zoomScale: 1.0,
+                zoomX: 0,
+                zoomY: 0,
+                
+                isDragging: false,
+                startX: 0,
+                startY: 0,
+
+                baseScale: 1.0,
+                baseX: 0,
+                baseY: 0,
+                touchStartDist: 0,
+                touchStartMidX: 0,
+                touchStartMidY: 0,
+                isPinching: false,
+                lastTapTime: 0,
+
+                touchStartTime: 0,
+                clickStartTime: 0,
+
+                startPoint: null,
+                endPoint: null,
+                loopEnabled: false,
+
+                initApp() {
+                    this.fps = parseInt(localStorage.getItem('local_controller_fps') || '30');
+                    this.isTablet = ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
+                    let lastTouchEnd = 0;
+                    document.addEventListener('touchend', (e) => {
+                        const now = (new Date()).getTime();
+                        if (now - lastTouchEnd <= 300) { e.preventDefault(); }
+                        lastTouchEnd = now;
+                    }, false);
+                },
+
+                // 🌐 WebRTC接続の初期設定 (スマホ側からのOffer待ち受け駆動へ改修)
+                async startWebRTCSetup() {
+                    this.topicId = 'msl_ma_' + Math.random().toString(36).substring(2, 15);
+                    // 自分が送った信号を自分で拾わないよう、識別用のIDを発行する
+                    this.clientId = 'pc_' + Math.random().toString(36).substring(2, 10);
+                    const baseAppUrl = window.location.href.replace('pc.html', 'sp.html');
+                    const connectUrl = `${baseAppUrl}?room=${this.topicId}`;
+                    this.qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(connectUrl)}`;
+                    
+                    document.getElementById('qr_modal').showModal();
+                    this.initSignaling();
+                },
+
+                closeQRModal() {
+                    if (this.eventSource && !this.isConnected) {
+                        this.eventSource.close();
+                        this.eventSource = null;
+                    }
+                    document.getElementById('qr_modal').close();
+                },
+
+                initSignaling() {
+                    const eventSource = new EventSource(`https://ntfy.sh/${this.topicId}/sse`);
+                    console.log('[DEBUG] SSE接続開始。topicId =', this.topicId);
+
+                    eventSource.onerror = (e) => {
+                        console.error('[DEBUG] SSE接続エラー:', e);
+                    };
+
+                    eventSource.onmessage = async (e) => {
+                        const envelope = JSON.parse(e.data);
+                        console.log('[DEBUG] 受信envelope:', envelope);
+
+                        // ntfyは実データを envelope.message に文字列として格納して送ってくるため、
+                        // もう一段JSON.parseして本来送りたかったデータを取り出す
+                        if (!envelope.message) return; // keep-alive等、中身が無い通知は無視
+
+                        let data;
+                        try {
+                            data = JSON.parse(envelope.message);
+                        } catch (err) {
+                            // ntfy側の制限超過メッセージなど、JSON以外が届くことがあるため無視する(念のための保険)
+                            console.warn('[DEBUG] JSON以外のメッセージを受信したため無視:', envelope.message);
+                            return;
+                        }
+                        console.log('[DEBUG] 受信データ(中身):', data);
+
+                        // 自分自身が送信したメッセージは無視する(同じトピックを送受信両方で使っているため)
+                        if (data.from === this.clientId) return;
+
+                        // スマホからOfferが分割送信されてくるので、全部揃ったら組み立てて処理する
+                        if (data.event === 'offer-chunk') {
+                            const payload = this.receiveChunk(data);
+                            if (payload && payload.offer) {
+                                await this.handleOffer(payload.offer);
+                            }
+                        }
+                    };
+                    // ここで setupPeerConnection() を即時実行するのをやめる（スマホを待つため）
+                },
+
+                // 🧩 大きなデータをntfy.shの1メッセージ上限に収まるサイズへ分割して送信する
+                // (Offer/AnswerのSDPは候補が多いと長くなり、そのまま送ると添付ファイル扱いになってしまうため)
+                sendChunkedMessage(event, payloadObj) {
+                    const json = JSON.stringify(payloadObj);
+                    const chunkSize = 800; // ntfy.shの上限に対して余裕を持たせたサイズ
+                    const totalChunks = Math.ceil(json.length / chunkSize);
+                    const msgId = Math.random().toString(36).substring(2, 10);
+
+                    for (let i = 0; i < totalChunks; i++) {
+                        const chunk = json.slice(i * chunkSize, (i + 1) * chunkSize);
+                        fetch(`https://ntfy.sh/${this.topicId}`, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                event: `${event}-chunk`,
+                                msgId,
+                                index: i,
+                                total: totalChunks,
+                                chunk,
+                                from: this.clientId
+                            })
+                        }).catch(err => console.error('[DEBUG] チャンク送信失敗:', err));
+                    }
+                    console.log(`[DEBUG] ${event}を${totalChunks}個に分割して送信開始 (msgId=${msgId})`);
+                },
+
+                // 🧩 分割で届いたデータをmsgIdごとに集め、全部揃ったら元のオブジェクトに復元する
+                // 揃っていない場合はnullを返す
+                receiveChunk(data) {
+                    const { msgId, index, total, chunk } = data;
+
+                    if (!this.chunkBuffers[msgId]) {
+                        this.chunkBuffers[msgId] = { total, parts: new Array(total) };
+                    }
+                    this.chunkBuffers[msgId].parts[index] = chunk;
+
+                    const buf = this.chunkBuffers[msgId];
+                    const receivedCount = buf.parts.filter(p => p !== undefined).length;
+                    console.log(`[DEBUG] チャンク受信 ${receivedCount}/${buf.total} (msgId=${msgId})`);
+
+                    if (receivedCount < buf.total) return null; // まだ全部揃っていない
+
+                    const fullJson = buf.parts.join('');
+                    delete this.chunkBuffers[msgId];
+
+                    try {
+                        return JSON.parse(fullJson);
+                    } catch (err) {
+                        console.error('[DEBUG] チャンク結合後のJSON.parseに失敗:', err);
+                        return null;
+                    }
+                },
+
+                // スマホから届いたOfferを処理する関数をPC側に追加
+                async handleOffer(offer) {
+                    this.peerConnection = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                    });
+
+                    // ICE candidateを1個ずつ送るのをやめ、候補が出揃うまで待ってからまとめて送る方式に変更
+                    // (ntfy.shの送信回数制限にかかるのを防ぐため)
+                    this.peerConnection.onicegatheringstatechange = () => {
+                        if (this.peerConnection.iceGatheringState === 'complete') {
+                            // Answerが大きくなりがちなので分割して送信する
+                            this.sendChunkedMessage('answer', { answer: this.peerConnection.localDescription });
+                        }
+                    };
+
+                    this.peerConnection.ontrack = (e) => {
+                        this.isConnected = true;
+                        this.closeQRModal();
+
+                        // 解析画面から接続した場合、古い動画データ(videoSrc)が残ったままだと
+                        // 画面がライブ映像用のレイアウトに切り替わらないため、ここで確実に片付ける
+                        if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
+                        this.videoSrc = '';
+                        this.originalFile = null;
+                        this.fileName = '';
+
+                        this.liveStream = e.streams[0];
+
+                        // Alpineがvideoタグのsrc属性の後片付けを終えるのを待ってから、
+                        // ライブ映像をセットする(同時に行うと映像がフリーズすることがあるため)
+                        this.$nextTick(() => {
+                            this.videoElement = document.getElementById('v-player');
+                            this.videoElement.removeAttribute('src'); // 念のため古いsrc属性を明示的に除去
+                            this.videoElement.srcObject = this.liveStream;
+                            // ハウリング防止：mutedは属性ではなくJSプロパティとして直接指定しないと、
+                            // 再生中の音声に反映されないため明示的に設定する
+                            this.videoElement.muted = true;
+                            this.videoElement.play().catch(err => console.log(err));
+                        });
+                    };
+
+                    // 🔌 接続が切れたことを検知したら、自動で後片付け(録画中なら確定→解析画面、そうでなければ初期画面)を行う
+                    this.peerConnection.oniceconnectionstatechange = () => {
+                        if (!this.peerConnection) return; // 手動切断などで既に後片付け済みの場合は何もしない
+                        const state = this.peerConnection.iceConnectionState;
+                        console.log('[DEBUG] iceConnectionState変化:', state);
+                        if (['disconnected', 'failed', 'closed'].includes(state)) {
+                            this.disconnectFromPhone();
+                        }
+                    };
+
+                    // リモートのOfferを設定し、Answerを作成する
+                    // (Answerの送信自体は上のonicegatheringstatechangeで候補が出揃ってから行う)
+                    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                    const answer = await this.peerConnection.createAnswer();
+                    await this.peerConnection.setLocalDescription(answer);
+                },
+
+                // 🔌 スマホとの接続を切る処理。「接続を解除する」ボタン(手動)と、切断の自動検知の両方から呼ばれる
+                // 録画中だった場合は録画を確定させて解析画面へ引き継ぎ、そうでなければ初期画面に戻す
+                disconnectFromPhone() {
+                    if (!this.peerConnection) return; // 二重実行防止(後片付け済み)
+
+                    if (this.isRecording) {
+                        this.toggleRecording(); // mediaRecorder.stop()相当。onstop内で解析画面への遷移が行われる
+                    } else {
+                        this.isConnected = false;
+                        if (this.videoElement) this.videoElement.srcObject = null;
+                    }
+
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                        this.eventSource = null;
+                    }
+                    this.peerConnection.close();
+                    this.peerConnection = null;
+
+                    if (this.liveStream) {
+                        this.liveStream.getTracks().forEach(track => track.stop());
+                        this.liveStream = null;
+                    }
+                },
+
+                toggleRecording() {
+                    if (!this.isRecording) {
+                        this.recordedChunks = [];
+
+                        // 🎨 画面表示(video要素)と録画処理を完全に分離するため、
+                        // 今映っている映像を見えないキャンバスに毎フレーム描き写し、
+                        // そのキャンバスの映像を録画する(video要素側には一切触れない)
+                        const canvas = document.createElement('canvas');
+                        canvas.width = this.videoElement.videoWidth || 1280;
+                        canvas.height = this.videoElement.videoHeight || 720;
+                        const ctx = canvas.getContext('2d');
+                        this.recordingCanvas = canvas;
+
+                        const drawFrame = () => {
+                            ctx.drawImage(this.videoElement, 0, 0, canvas.width, canvas.height);
+                            this.recordingAnimationId = requestAnimationFrame(drawFrame);
+                        };
+                        drawFrame();
+
+                        // キャンバスには音声が無いため、音声だけliveStreamから複製して合成する
+                        const canvasStream = canvas.captureStream(30);
+                        const audioTracks = this.liveStream.getAudioTracks().map(track => track.clone());
+                        const recordingStream = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
+
+                        this.mediaRecorder = new MediaRecorder(recordingStream, { mimeType: 'video/webm;codecs=vp8,opus' });
+                        this.mediaRecorder.ondataavailable = (e) => {
+                            if (e.data.size > 0) this.recordedChunks.push(e.data);
+                        };
+                        this.mediaRecorder.onstop = () => {
+                            // 描画ループと、複製した音声トラックを停止する(表示用のliveStreamはそのまま維持)
+                            cancelAnimationFrame(this.recordingAnimationId);
+                            this.recordingAnimationId = null;
+                            this.recordingCanvas = null;
+                            audioTracks.forEach(track => track.stop());
+
+                            const recordedBlob = new Blob(this.recordedChunks, { type: 'video/webm' });
+                            this.originalFile = recordedBlob;
+                            
+                            if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
+                            
+                            // 接続は維持したまま解析画面へ切り替える(isConnectedはfalseにしない)
+                            if (this.videoElement) this.videoElement.srcObject = null;
+                            this.videoSrc = URL.createObjectURL(recordedBlob);
+                            this.fileName = `Recorded_${new Date().toISOString().replace(/[:.]/g, '-')}.webm`;
+                            
+                            this.currentSpeed = 1.0;
+                            this.currentTime = 0;
+                            this.isMirrored = false;
+                            this.clearLoop();
+                            this.resetZoom();
+                            
+                            this.$nextTick(() => {
+                                this.videoElement = document.getElementById('v-player');
+                                this.videoElement.muted = false; // 解析画面では録画した音声を聞けるようミュート解除
+                                this.videoElement.playbackRate = this.currentSpeed;
+                                this.videoElement.play().catch(err => console.log(err));
+                            });
+                        };
+                        this.mediaRecorder.start();
+                        this.isRecording = true;
+                    } else {
+                        this.mediaRecorder.stop();
+                        this.isRecording = false;
+                    }
+                },
+
+                // 🔁「再撮影」ボタン：維持していたライブ映像に解析画面から戻る
+                resumeLiveView() {
+                    if (!this.liveStream) return; // 念のためのガード(通常は接続維持中のみボタン自体が表示される)
+
+                    if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
+                    this.videoSrc = '';
+                    this.originalFile = null;
+                    this.fileName = '';
+
+                    this.$nextTick(() => {
+                        this.videoElement = document.getElementById('v-player');
+                        this.videoElement.removeAttribute('src'); // 念のため古いsrc属性を明示的に除去
+                        this.videoElement.srcObject = this.liveStream;
+                        this.videoElement.muted = true; // ライブ視聴に戻るのでハウリング防止のため再度ミュート
+                        this.videoElement.play().catch(err => console.log(err));
+                    });
+                },
+
+                handleKeyDown(e) {
+                    if (!this.videoSrc) return;
+                    if (e.code === 'Space') {
+                        e.preventDefault();
+                        this.togglePlay();
+                    } else if (e.code === 'ArrowRight') {
+                        e.preventDefault();
+                        this.stepFrame(e.shiftKey ? 5 : 1);
+                    } else if (e.code === 'ArrowLeft') {
+                        e.preventDefault();
+                        this.stepFrame(e.shiftKey ? -5 : -1);
+                    }
+                },
+
+                handleVideoWheel(e) {
+                    if (!this.videoSrc) return;
+                    e.preventDefault();
+                    const zoomIntensity = 0.1;
+                    const delta = e.deltaY < 0 ? 1 : -1;
+                    this.zoomScale = Math.min(Math.max(this.zoomScale + delta * zoomIntensity, 1.0), 5.0);
+                    if (this.zoomScale <= 1.0) {
+                        this.zoomX = 0;
+                        this.zoomY = 0;
+                    }
+                },
+
+                handleVideoMouseDown(e) {
+                    if (!this.videoSrc || this.isTablet || this.zoomScale <= 1.0) {
+                        this.clickStartTime = Date.now();
+                        return;
+                    }
+                    this.isDragging = true;
+                    this.startX = e.clientX - this.zoomX;
+                    this.startY = e.clientY - this.zoomY;
+                },
+
+                handleVideoMouseMove(e) {
+                    if (!this.isDragging) return;
+                    this.zoomX = e.clientX - this.startX;
+                    this.zoomY = e.clientY - this.startY;
+                },
+
+                handleVideoMouseUp(e) {
+                    this.isDragging = false;
+                    if (Date.now() - this.clickStartTime < 200) {
+                        this.togglePlay();
+                    }
+                    this.clickStartTime = 0;
+                },
+
+                handleVideoMouseLeave() { this.isDragging = false; },
+
+                handleVideoTouchStart(e) {
+                    if (!this.videoSrc) return;
+                    const now = Date.now();
+                    if (e.touches.length === 1) { this.touchStartTime = now; }
+                    if (e.touches.length === 1 && (now - this.lastTapTime < 300)) {
+                        this.resetZoom();
+                        this.touchStartTime = 0;
+                        this.lastTapTime = 0;
+                        return;
+                    }
+                    if (e.touches.length === 1) { this.lastTapTime = now; }
+
+                    if (e.touches.length === 2) {
+                        this.isPinching = true;
+                        const t1 = e.touches[0];
+                        const t2 = e.touches[1];
+                        this.touchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+                        this.touchStartMidX = (t1.clientX + t2.clientX) / 2;
+                        this.touchStartMidY = (t1.clientY + t2.clientY) / 2;
+                        this.baseScale = this.zoomScale;
+                        this.baseX = this.zoomX;
+                        this.baseY = this.zoomY;
+                    }
+                },
+
+                handleVideoTouchMove(e) {
+                    if (!this.videoSrc) return;
+                    if (e.touches.length === 1 && this.touchStartTime > 0) { this.touchStartTime = 0; }
+                    if (!this.isPinching) return;
+
+                    if (e.touches.length === 2) {
+                        const t1 = e.touches[0];
+                        const t2 = e.touches[1];
+                        const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+                        const currentMidX = (t1.clientX + t2.clientX) / 2;
+                        const currentMidY = (t1.clientY + t2.clientY) / 2;
+
+                        if (this.touchStartDist > 0) {
+                            const factor = currentDist / this.touchStartDist;
+                            this.zoomScale = Math.min(Math.max(this.baseScale * factor, 1.0), 5.0);
+                        }
+
+                        if (this.zoomScale > 1.0) {
+                            this.zoomX = this.baseX + (currentMidX - this.touchStartMidX);
+                            this.zoomY = this.baseY + (currentMidY - this.touchStartMidY);
+                        } else {
+                            this.zoomX = 0;
+                            this.zoomY = 0;
+                        }
+                    }
+                },
+
+                handleVideoTouchEnd(e) {
+                    const now = Date.now();
+                    if (this.touchStartTime > 0 && (now - this.touchStartTime < 250) && e.touches.length === 0 && !this.isPinching) {
+                        setTimeout(() => {
+                            if (Date.now() - this.lastTapTime >= 280) { this.togglePlay(); }
+                        }, 50);
+                    }
+                    this.touchStartTime = 0;
+
+                    if (e.touches.length < 2) {
+                        this.isPinching = false;
+                        if (this.zoomScale <= 1.0) {
+                            this.zoomScale = 1.0;
+                            this.zoomX = 0;
+                            this.zoomY = 0;
+                        }
+                    }
+                },
+
+                resetZoom() {
+                    this.zoomScale = 1.0;
+                    this.zoomX = 0;
+                    this.zoomY = 0;
+                },
+
+                handleFileSelect(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    if (this.videoElement) { this.videoElement.pause(); }
+                    this.isPlaying = false;
+
+                    this.originalFile = file;
+                    this.fileName = file.name;
+                    
+                    if (this.videoSrc) { URL.revokeObjectURL(this.videoSrc); }
+                    this.videoSrc = URL.createObjectURL(file);
+                    
+                    this.currentSpeed = 1.0;
+                    this.currentTime = 0;
+                    this.isMirrored = false;
+                    this.clearLoop();
+                    this.resetZoom();
+                    
+                    this.$nextTick(() => {
+                        this.videoElement = document.getElementById('v-player');
+                        this.videoElement.muted = false; // アップロードした動画は音声ありで再生する
+                        this.videoElement.playbackRate = this.currentSpeed;
+                        this.videoElement.play().catch(err => console.log("Auto-play blocked", err));
+                    });
+                },
+
+                onMetadataLoaded(e) { this.duration = e.target.duration; },
+                togglePlay() {
+                    if (!this.videoElement) return;
+                    if (this.isPlaying) { this.videoElement.pause(); } 
+                    else { this.videoElement.play(); }
+                },
+
+                updateTime(e) {
+                    if (!this.isUserSeeking) { this.currentTime = e.target.currentTime; }
+                    if (this.loopEnabled && this.startPoint !== null && this.endPoint !== null) {
+                        if (e.target.currentTime >= this.endPoint) {
+                            this.videoElement.currentTime = this.startPoint;
+                            this.currentTime = this.startPoint;
+                        }
+                    }
+                },
+
+                onSeek() {
+                    if (!this.videoElement) return;
+                    this.isUserSeeking = true;
+                    this.videoElement.currentTime = this.currentTime;
+                    this.isUserSeeking = false;
+                },
+
+                setStartPoint() {
+                    if (!this.videoElement) return;
+                    this.startPoint = this.videoElement.currentTime;
+                    if (this.endPoint !== null && this.startPoint >= this.endPoint) {
+                        this.endPoint = null;
+                        this.loopEnabled = false;
+                    }
+                    if (this.startPoint !== null && this.endPoint !== null) { this.loopEnabled = true; }
+                },
+
+                setEndPoint() {
+                    if (!this.videoElement) return;
+                    const targetTime = this.videoElement.currentTime;
+                    if (this.startPoint !== null && targetTime <= this.startPoint) {
+                        alert("B点はA点より後ろに指定してください。");
+                        return;
+                    }
+                    this.endPoint = targetTime;
+                    if (this.startPoint !== null) { this.loopEnabled = true; }
+                },
+
+                jumpToStart() {
+                    if (!this.videoElement || this.startPoint === null) return;
+                    this.videoElement.currentTime = this.startPoint;
+                    this.currentTime = this.startPoint;
+                },
+
+                clearLoop() {
+                    this.startPoint = null;
+                    this.endPoint = null;
+                    this.loopEnabled = false;
+                },
+
+                stepFrame(direction) {
+                    if (!this.videoElement) return;
+                    this.videoElement.pause();
+                    const frameDuration = 1 / this.fps;
+                    let newTime = this.videoElement.currentTime + (direction * frameDuration);
+                    if (newTime < 0) newTime = 0;
+                    if (newTime > this.duration) newTime = this.duration;
+                    this.videoElement.currentTime = newTime;
+                    this.currentTime = newTime;
+                },
+
+                changeSpeed() {
+                    if (this.videoElement) { this.videoElement.playbackRate = this.currentSpeed; }
+                },
+
+                adjustSpeed(amount) {
+                    this.currentSpeed = Math.min(Math.max(this.currentSpeed + amount, 0.25), 2.0);
+                    this.changeSpeed();
+                },
+
+                setSpeed(speed) {
+                    this.currentSpeed = speed;
+                    this.changeSpeed();
+                },
+
+                formatTime(seconds) {
+                    if (isNaN(seconds)) return "00:00.00";
+                    const m = Math.floor(seconds / 60);
+                    const s = Math.floor(seconds % 60);
+                    const ms = Math.floor((seconds % 1) * 100);
+                    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+                },
+
+                saveSettings() {
+                    localStorage.setItem('local_controller_fps', this.fps.toString());
+                },
+
+                exportFullVideo() {
+                    if (!this.originalFile) return;
+                    const blobUrl = URL.createObjectURL(this.originalFile);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = this.fileName || 'motion_video.webm';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
